@@ -12,11 +12,22 @@ Public distribution repo για synthetic lab data files που χρησιμοπ
 
 | File | Size | Description |
 |---|---|---|
+| `Day3/data_contract_validation_notebook.py` | 18 KB | **Ready-made Databricks notebook** — Import → Run All (10 code + 12 markdown cells) |
 | `Day3/declarations.csv` | 53 KB | 300 synthetic ΑΑΔΕ tax declarations |
 | `Day3/doy.csv` | 0.7 KB | ΔΟΥ reference table (8 ΔΟΥs) |
 | `Day3/employees.csv` | 0.4 KB | Tax employees reference |
 | `Day3/taxpayers.csv` | 2.7 KB | Taxpayer reference |
 | `Day3/aade_declarations_data_contract.yaml` | 4.5 KB | Data contract spec (schema + rules + security) |
+
+#### 🚀 Quick start — Day 3
+
+**Easiest path** (Method 0): Download the ready-made notebook and import it into Databricks.
+
+```bash
+curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/data_contract_validation_notebook.py
+```
+
+Then in Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. Notebook auto-downloads the 5 data files and runs the full data contract pipeline (~30 sec).
 
 ### Day 4 — ML Lifecycle (ΑΑΔΕ Risk Scoring)
 
