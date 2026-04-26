@@ -382,11 +382,11 @@ spark.sql(f"""
 # Add column comments for self-documentation
 spark.sql("""
     ALTER TABLE workspace.aade.tax_declarations_silver
-    ALTER COLUMN ΑΦΜ COMMENT 'PII: Taxpayer tax ID — apply masking policy for analyst roles'
+    ALTER COLUMN `ΑΦΜ` COMMENT 'PII: Taxpayer tax ID — apply masking policy for analyst roles'
 """)
 spark.sql("""
     ALTER TABLE workspace.aade.tax_declarations_silver
-    ALTER COLUMN Επωνυμία COMMENT 'PII: Taxpayer legal name — first letter only for analysts'
+    ALTER COLUMN `Επωνυμία` COMMENT 'PII: Taxpayer legal name — first letter only for analysts'
 """)
 
 print("🏷️  Tags + comments applied to workspace.aade.tax_declarations_silver")
