@@ -1,0 +1,167 @@
+contract_id: aade.tax_declarations.v1
+version: 1.0.0
+owner: AADE Data Engineering Team
+domain: Tax Declarations
+layer: silver
+source_system: TAXIS
+
+dataset:
+  name: workspace.aade.tax_declarations_silver
+  description: Cleaned tax declarations from TAXIS, ready for analytics and Gold aggregations.
+  primary_key:
+    - ΔηλωσηID
+  expected_freshness: daily_before_06_00
+  retention: 7_years
+
+source:
+  format: csv
+  path: /Volumes/workspace/aade/aade_data/declarations.csv
+  options:
+    header: true
+    inferSchema: false
+
+schema:
+  - name: ΔηλωσηID
+    type: integer
+    nullable: false
+    description: Unique declaration identifier.
+  - name: Ημερομηνία
+    type: date
+    nullable: false
+    description: Declaration submission date.
+  - name: ΑΦΜ
+    type: string
+    nullable: false
+    pii: true
+    description: Taxpayer tax identification number.
+  - name: Επωνυμία
+    type: string
+    nullable: false
+    pii: true
+    description: Taxpayer legal name.
+  - name: ΔΟΥID
+    type: integer
+    nullable: false
+    reference: workspace.aade.doy_silver.ΔΟΥID
+  - name: Κατηγορία_Φόρου
+    type: string
+    nullable: false
+    allowed_values:
+      - ΦΠΑ
+      - Εισοδήματος
+      - Ακινήτων
+      - Μισθοδοσίας
+  - name: Βάση_Φόρου
+    type: double
+    nullable: false
+    min: 0
+  - name: Συντελεστής_Pct
+    type: double
+    nullable: false
+    min: 0
+    max: 100
+  - name: Ποσό_EUR
+    type: double
+    nullable: false
+    min: 0
+  - name: Κατάσταση
+    type: string
+    nullable: false
+    allowed_values:
+      - Εγκεκριμένη
+      - Εκκρεμής
+      - Απορριφθείσα
+  - name: Περιφέρεια
+    type: string
+    nullable: false
+  - name: Πόλη
+    type: string
+    nullable: false
+  - name: ΥπάλληλοςID
+    type: integer
+    nullable: true
+    reference: workspace.aade.employees_silver.ΥπάλληλοςID
+  - name: Φορ_Ετος
+    type: integer
+    nullable: false
+    min: 2020
+    max: 2030
+  - name: MonthNumber
+    type: integer
+    nullable: false
+    min: 1
+    max: 12
+  - name: MonthName
+    type: string
+    nullable: false
+
+quality_rules:
+  - id: DQ001
+    name: primary_key_not_null
+    description: ΔηλωσηID must not be null.
+    severity: error
+    expression: ΔηλωσηID IS NOT NULL
+    action_on_fail: quarantine
+  - id: DQ002
+    name: afm_not_null_and_9_digits
+    description: ΑΦΜ must be present and 9 digits.
+    severity: error
+    expression: ΑΦΜ IS NOT NULL AND ΑΦΜ RLIKE '^[0-9]{9}$'
+    action_on_fail: quarantine
+  - id: DQ003
+    name: tax_amount_non_negative
+    description: Tax amount cannot be negative.
+    severity: error
+    expression: Ποσό_EUR >= 0
+    action_on_fail: quarantine
+  - id: DQ004
+    name: tax_rate_valid_range
+    description: Tax rate must be between 0 and 100.
+    severity: error
+    expression: Συντελεστής_Pct BETWEEN 0 AND 100
+    action_on_fail: quarantine
+  - id: DQ005
+    name: month_number_valid
+    description: Month number must be 1-12.
+    severity: error
+    expression: MonthNumber BETWEEN 1 AND 12
+    action_on_fail: quarantine
+  - id: DQ006
+    name: allowed_tax_status
+    description: Status must be one of approved, pending, rejected.
+    severity: error
+    expression: Κατάσταση IN ('Εγκεκριμένη', 'Εκκρεμής', 'Απορριφθείσα')
+    action_on_fail: quarantine
+  - id: DQ007
+    name: amount_matches_base_and_rate
+    description: Ποσό_EUR should approximately equal Βάση_Φόρου * Συντελεστής_Pct / 100.
+    severity: warning
+    expression: abs(Ποσό_EUR - (Βάση_Φόρου * Συντελεστής_Pct / 100)) <= 1.0
+    action_on_fail: flag_for_review
+  - id: DQ008
+    name: declaration_date_not_future
+    description: Declaration date cannot be in the future.
+    severity: error
+    expression: Ημερομηνία <= current_date()
+    action_on_fail: quarantine
+
+security:
+  classification: confidential
+  pii_columns:
+    - ΑΦΜ
+    - Επωνυμία
+  masking:
+    ΑΦΜ: show_last_4
+    Επωνυμία: first_letter_only
+  allowed_roles:
+    data_engineer: read_write
+    data_steward: read
+    analyst: masked_read
+    auditor: controlled_read
+
+publishing:
+  if_error_rules_fail: stop_pipeline
+  if_warning_rules_fail: publish_with_warning
+  write_valid_to: workspace.aade.tax_declarations_silver
+  write_invalid_to: workspace.aade.tax_declarations_quarantine
+  write_results_to: workspace.aade.data_contract_audit
