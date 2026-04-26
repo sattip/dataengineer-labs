@@ -216,15 +216,44 @@ if extra:
 # MAGIC **Severity levels**:
 # MAGIC - `error` → row goes to quarantine (does not enter Silver)
 # MAGIC - `warning` → flag for review (still goes to Silver)
+# MAGIC
+# MAGIC ### ⚠️ Greek column names need backticks
+# MAGIC Spark SQL requires non-ASCII identifiers (όπως `ΔηλωσηID`, `ΑΦΜ`) να είναι σε backticks.
+# MAGIC Ο `quote_greek_columns` helper το κάνει αυτόματα από τις expressions του YAML.
 
 # COMMAND ----------
+
+import re
+
+def quote_greek_columns(expression: str, schema_fields: list) -> str:
+    """Wrap Greek column names with backticks for Spark SQL compatibility.
+
+    Iterates through column names in the contract schema and replaces
+    bare references with backticked ones, only outside string literals.
+    """
+    result = expression
+    # Sort by length desc to avoid partial replacements (e.g., 'ΑΦΜ' before 'ΑΦΜ_alt')
+    col_names = sorted([f["name"] for f in schema_fields], key=len, reverse=True)
+
+    for col_name in col_names:
+        # Skip if column doesn't have non-ASCII chars (no need to quote)
+        if col_name.isascii():
+            continue
+        # Replace col_name with `col_name` using word-boundary-ish regex
+        # (?<![\w`]) — not preceded by word char or backtick (avoid double-quoting)
+        # (?![\w`])  — not followed by word char or backtick
+        pattern = r'(?<![\w`])' + re.escape(col_name) + r'(?![\w`])'
+        result = re.sub(pattern, f'`{col_name}`', result)
+
+    return result
 
 results = []
 total = raw_df.count()
 
 for rule in contract["quality_rules"]:
     rule_id = rule["id"]
-    expr = rule["expression"]
+    raw_expr = rule["expression"]
+    expr = quote_greek_columns(raw_expr, contract["schema"])
     severity = rule["severity"]
 
     # Count rows that FAIL the rule (i.e., NOT(expression))
@@ -237,13 +266,14 @@ for rule in contract["quality_rules"]:
         "severity": severity,
         "failed_count": failed_count,
         "pass_pct": pass_pct,
-        "expression": expr,
+        "expression": expr,         # quoted version (for execution)
+        "expression_raw": raw_expr,  # original (for audit/portability)
         "action_on_fail": rule.get("action_on_fail", "quarantine"),
     })
     print(
         f"{icon} {rule_id} [{severity:7s}] "
         f"{failed_count:>3d} failures ({pass_pct:5.1f}% pass)  "
-        f"— {expr[:60]}"
+        f"— {raw_expr[:60]}"
     )
 
 # COMMAND ----------
@@ -256,8 +286,12 @@ for rule in contract["quality_rules"]:
 
 # COMMAND ----------
 
-error_rules = [r for r in contract["quality_rules"] if r["severity"] == "error"]
-combined_fail = " OR ".join([f"NOT ({r['expression']})" for r in error_rules])
+# Use the already-quoted expressions από το results array (contains quoted versions)
+error_rules_quoted = [
+    r["expression"] for r in results
+    if r["severity"] == "error"
+]
+combined_fail = " OR ".join([f"NOT ({e})" for e in error_rules_quoted])
 
 invalid_df = raw_df.filter(combined_fail)
 valid_df = raw_df.filter(f"NOT ({combined_fail})")
@@ -266,7 +300,7 @@ print(f"✅ Valid rows:    {valid_df.count():>4d}")
 print(f"🚨 Invalid rows:  {invalid_df.count():>4d}")
 
 print("\nSample invalid records:")
-invalid_df.select("ΔηλωσηID", "ΑΦΜ", "Ποσό_EUR", "Κατάσταση", "MonthNumber") \
+invalid_df.select("`ΔηλωσηID`", "`ΑΦΜ`", "`Ποσό_EUR`", "`Κατάσταση`", "MonthNumber") \
           .show(truncate=False)
 
 # COMMAND ----------
