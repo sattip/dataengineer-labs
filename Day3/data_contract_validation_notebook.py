@@ -177,7 +177,7 @@ raw_df = raw_df.withColumn('Ημερομηνία', to_date(col('Ημερομην
 
 print(f"📥 Total rows: {raw_df.count()} (300 clean + 5 bad)")
 print("\nBad records preview:")
-raw_df.filter("ΔηλωσηID >= 9001 OR ΔηλωσηID IS NULL") \
+raw_df.filter("`ΔηλωσηID` >= 9001 OR `ΔηλωσηID` IS NULL") \
       .select('ΔηλωσηID', 'ΑΦΜ', 'Ποσό_EUR', 'Κατάσταση', 'MonthNumber') \
       .show(truncate=False)
 
