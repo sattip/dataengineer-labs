@@ -8,11 +8,12 @@ Public distribution repo για synthetic lab data files που χρησιμοπ
 
 ## 📦 Contents
 
-### Day 3 — Data Contracts (Tax Declarations)
+### Day 3 — Data Contracts + Lineage (Tax Declarations)
 
 | File | Size | Description |
 |---|---|---|
-| `Day3/data_contract_validation_notebook.py` | 18 KB | **Ready-made Databricks notebook** — Import → Run All (10 code + 12 markdown cells) |
+| `Day3/data_contract_validation_notebook.py` | 18 KB | **Άσκηση 3** — Data Contract Validation (10 code + 12 markdown cells) |
+| `Day3/Lineage_History_Notebook.py` | 11 KB | **Άσκηση 4** — Lineage & Time Travel (DESCRIBE HISTORY, RESTORE, UC Lineage) |
 | `Day3/declarations.csv` | 53 KB | 300 synthetic ΑΑΔΕ tax declarations |
 | `Day3/doy.csv` | 0.7 KB | ΔΟΥ reference table (8 ΔΟΥs) |
 | `Day3/employees.csv` | 0.4 KB | Tax employees reference |
@@ -21,13 +22,19 @@ Public distribution repo για synthetic lab data files που χρησιμοπ
 
 #### 🚀 Quick start — Day 3
 
-**Easiest path** (Method 0): Download the ready-made notebook and import it into Databricks.
+**Άσκηση 3 (Data Contract Validation)**: Download → Import → Run All.
 
 ```bash
 curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/data_contract_validation_notebook.py
 ```
 
-Then in Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. Notebook auto-downloads the 5 data files and runs the full data contract pipeline (~30 sec).
+**Άσκηση 4 (Lineage & Time Travel)**: requires Άσκηση 3 to have run first.
+
+```bash
+curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Lineage_History_Notebook.py
+```
+
+In Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. The contract notebook auto-downloads CSVs and creates silver/quarantine/audit tables; the lineage notebook then queries them and demonstrates `RESTORE TABLE`.
 
 ### Day 4 — ML Lifecycle (ΑΑΔΕ Risk Scoring)
 
