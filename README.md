@@ -51,6 +51,7 @@ In Databricks: **Workspace → Day2 folder → Right-click → Import → drag-d
 | `Day3/Lineage_History_Notebook.py` | 14 KB | **Άσκηση 4** — Lineage & Time Travel (DESCRIBE HISTORY, RESTORE, UC Lineage) |
 | `Day3/Optimize_Vacuum_Notebook.py` | 11 KB | **Άσκηση 5** — OPTIMIZE, Z-ORDER & VACUUM (compaction, data skipping, cleanup) |
 | `Day3/CDF_Incremental_Notebook.py` | 13 KB | **Άσκηση 6** — Change Data Feed & Incremental ETL (CDC, partial recompute, MERGE) |
+| `Day3/Streaming_Notebook.py` | 13 KB | **Άσκηση 7** — Structured Streaming + Delta (rate source, watermarks, alerts, unified batch+streaming) |
 | `Day3/declarations.csv` | 53 KB | 300 synthetic ΑΑΔΕ tax declarations |
 | `Day3/doy.csv` | 0.7 KB | ΔΟΥ reference table (8 ΔΟΥs) |
 | `Day3/employees.csv` | 0.4 KB | Tax employees reference |
@@ -82,6 +83,14 @@ curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Opt
 ```bash
 curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/CDF_Incremental_Notebook.py
 ```
+
+**Άσκηση 7 (Structured Streaming + Delta)**: αυτο-περιεχόμενο, synthetic events.
+
+```bash
+curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Streaming_Notebook.py
+```
+
+⚠️ Streaming notebook ξεκινάει continuous queries — πάντα τρέχε το Βήμα 6 (Stop streams) στο τέλος.
 
 In Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. Όλα τα notebooks είναι self-contained (Cell 0 setup + Cell 0.5 bootstrap αν χρειαστεί).
 
