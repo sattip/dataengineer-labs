@@ -43,13 +43,14 @@ https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day2/Lab3_MYDATA
 
 In Databricks: **Workspace → Day2 folder → Right-click → Import → drag-drop → Run All**.
 
-### Day 3 — Data Contracts, Lineage & Optimize (Tax Declarations)
+### Day 3 — Data Contracts, Lineage, Optimize & CDF (Tax Declarations)
 
 | File | Size | Description |
 |---|---|---|
 | `Day3/data_contract_validation_notebook.py` | 18 KB | **Άσκηση 3** — Data Contract Validation (10 code + 12 markdown cells) |
 | `Day3/Lineage_History_Notebook.py` | 14 KB | **Άσκηση 4** — Lineage & Time Travel (DESCRIBE HISTORY, RESTORE, UC Lineage) |
 | `Day3/Optimize_Vacuum_Notebook.py` | 11 KB | **Άσκηση 5** — OPTIMIZE, Z-ORDER & VACUUM (compaction, data skipping, cleanup) |
+| `Day3/CDF_Incremental_Notebook.py` | 13 KB | **Άσκηση 6** — Change Data Feed & Incremental ETL (CDC, partial recompute, MERGE) |
 | `Day3/declarations.csv` | 53 KB | 300 synthetic ΑΑΔΕ tax declarations |
 | `Day3/doy.csv` | 0.7 KB | ΔΟΥ reference table (8 ΔΟΥs) |
 | `Day3/employees.csv` | 0.4 KB | Tax employees reference |
@@ -74,6 +75,12 @@ curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Lin
 
 ```bash
 curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Optimize_Vacuum_Notebook.py
+```
+
+**Άσκηση 6 (Change Data Feed & Incremental ETL)**: auto-bootstraps silver αν λείπει.
+
+```bash
+curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/CDF_Incremental_Notebook.py
 ```
 
 In Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. Όλα τα notebooks είναι self-contained (Cell 0 setup + Cell 0.5 bootstrap αν χρειαστεί).
