@@ -110,14 +110,14 @@ else:
         .csv(csv_path))
     print(f"   📥 Read {bronze.count()} rows from declarations.csv")
 
-    # Inject 5 bad records για το quarantine demo
-    bad = bronze.limit(5).withColumn("ΣυνολικοΕισοδημα", lit(-1.0))
+    # Inject 5 bad records για το quarantine demo (negative amount)
+    bad = bronze.limit(5).withColumn("`Ποσό_EUR`", lit(-1.0))
     combined = bronze.unionByName(bad)
 
-    # Split silver vs quarantine (rule: ΣυνολικοΕισοδημα >= 0)
-    silver_df = combined.filter(col("`ΣυνολικοΕισοδημα`") >= 0)
-    quarantine_df = (combined.filter(col("`ΣυνολικοΕισοδημα`") < 0)
-        .withColumn("rule_failed", lit("no_negative_income"))
+    # Split silver vs quarantine (rule: Ποσό_EUR >= 0)
+    silver_df = combined.filter(col("`Ποσό_EUR`") >= 0)
+    quarantine_df = (combined.filter(col("`Ποσό_EUR`") < 0)
+        .withColumn("rule_failed", lit("no_negative_amount"))
         .withColumn("quarantined_at", current_timestamp()))
 
     # Write silver
@@ -137,7 +137,7 @@ else:
     # Audit table — minimal version
     audit_rows = [
         ("run_001", "schema_match",       "critical", True,  0, 305),
-        ("run_001", "no_negative_income", "critical", False, 5, 305),
+        ("run_001", "no_negative_amount", "critical", False, 5, 305),
         ("run_001", "afm_format",         "warning",  True,  0, 305),
         ("run_001", "doy_in_range",       "warning",  True,  0, 305),
     ]
@@ -249,15 +249,19 @@ from pyspark.sql import Row
 
 silver_cols = spark.table("workspace.aade.tax_declarations_silver").columns
 
-# Build bad rows με όλα τα columns που έχει το silver, default 0/None για άγνωστα
-def make_bad(decl_id, afm, name, income):
+# Build bad rows με όλα τα columns που έχει το silver, default None για άγνωστα
+def make_bad(decl_id, afm, name, amount):
     base = {c: None for c in silver_cols}
-    overrides = {}
-    for col_name, val in [("ΔηλωσηID", decl_id), ("ΑΦΜ", afm), ("Επωνυμία", name),
-                          ("ΣυνολικοΕισοδημα", income), ("ΕτοςΔηλωσης", 2024)]:
+    overrides = {
+        "ΔηλωσηID": decl_id,
+        "ΑΦΜ": afm,
+        "Επωνυμία": name,
+        "Ποσό_EUR": amount,
+        "Φορ_Ετος": 2024,
+    }
+    for col_name, val in overrides.items():
         if col_name in base:
-            overrides[col_name] = val
-    base.update(overrides)
+            base[col_name] = val
     return Row(**base)
 
 bad_batch = spark.createDataFrame([
@@ -303,7 +307,7 @@ new_rows = spark.sql(f"""
   SELECT * FROM workspace.aade.tax_declarations_silver VERSION AS OF {previous_v}
 """)
 print(f"\n🔍 Νέα rows στη version {current_v} (δεν υπήρχαν στη {previous_v}):")
-new_rows.select("`ΔηλωσηID`", "`ΑΦΜ`", "`Επωνυμία`", "`ΣυνολικοΕισοδημα`").show(truncate=False)
+new_rows.select("`ΔηλωσηID`", "`ΑΦΜ`", "`Επωνυμία`", "`Ποσό_EUR`").show(truncate=False)
 
 # COMMAND ----------
 

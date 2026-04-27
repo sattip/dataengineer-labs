@@ -1,12 +1,47 @@
-# 📚 Data Engineer Training — Lab Data Files
+# 📚 Data Engineer Training — Lab Notebooks & Data
 
-Public distribution repo για synthetic lab data files που χρησιμοποιούνται στο Data Engineer training program.
+Public distribution repo για lab notebooks (Databricks `.py` source format) + synthetic data files που χρησιμοποιούνται στο Data Engineer training program.
 
 > ⚠️ **All data is synthetic** — generated με fixed `random.seed(42)`. Δεν περιέχει real personal information ή confidential business data.
 
 ---
 
+## 🚀 First time setup
+
+**Read this first**: [`Databricks_Setup_Guide.md`](./Databricks_Setup_Guide.md) — step-by-step για schema/volume/folder structure στο Databricks Free Edition.
+
+---
+
 ## 📦 Contents
+
+### Day 2 — Transformations + DQ Cleansing
+
+| File | Size | Description |
+|---|---|---|
+| `Day2/Lab1_LIVEDEMO_FreeEdition.py` | — | **Lab 1** — End-to-end live demo (6 cells) |
+| `Day2/Lab2_EXERCISE2_Payments.py` | — | **Lab 2** — Payments cleansing + enrichment |
+| `Day2/Lab3_MYDATA_CLEANUP_Demo.py` | — | **Lab 3** — myDATA invoices DQ (10 issue types) |
+| `Day2/declarations.csv` | 53 KB | 300 ΑΑΔΕ tax declarations |
+| `Day2/taxpayers.csv` | 2.7 KB | Taxpayer master |
+| `Day2/doy.csv` | 0.7 KB | ΔΟΥ master |
+| `Day2/employees.csv` | 0.4 KB | Employee master |
+| `Day2/payments.csv` | 25 KB | 250 payments (23 DQ issues) |
+| `Day2/mydata_invoices_MESSY.csv` | 16 KB | 100 invoices (35 DQ issues) |
+
+#### 🚀 Quick start — Day 2
+
+```
+# Lab 1 (LIVE DEMO):
+https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day2/Lab1_LIVEDEMO_FreeEdition.py
+
+# Lab 2 (Payments):
+https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day2/Lab2_EXERCISE2_Payments.py
+
+# Lab 3 (myDATA cleanup):
+https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day2/Lab3_MYDATA_CLEANUP_Demo.py
+```
+
+In Databricks: **Workspace → Day2 folder → Right-click → Import → drag-drop → Run All**.
 
 ### Day 3 — Data Contracts + Lineage (Tax Declarations)
 
