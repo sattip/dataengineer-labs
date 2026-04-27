@@ -354,6 +354,23 @@ else:
 
 # COMMAND ----------
 
+# Defensive: re-derive previous_v αν δεν υπάρχει στο scope
+# (π.χ. όταν τρέχει το cell μεμονωμένα μετά από compute restart)
+try:
+    previous_v
+except NameError:
+    print("ℹ️  Re-deriving previous_v από DESCRIBE HISTORY...")
+    history = spark.sql("DESCRIBE HISTORY workspace.aade.tax_declarations_silver").collect()
+    versions = sorted([r["version"] for r in history])
+    if len(versions) < 2:
+        raise RuntimeError(
+            "Δεν υπάρχουν αρκετές versions για RESTORE. "
+            "Τρέξε πρώτα τα Cells 0–5 (Run All) για να δημιουργηθεί η bad-batch version."
+        )
+    current_v = versions[-1]
+    previous_v = versions[-2]
+    print(f"   ✅ current={current_v}, previous={previous_v}\n")
+
 spark.sql(f"RESTORE TABLE workspace.aade.tax_declarations_silver TO VERSION AS OF {previous_v}")
 
 after = spark.sql("SELECT COUNT(*) AS total FROM workspace.aade.tax_declarations_silver").collect()[0]["total"]
