@@ -72,7 +72,7 @@ for fname in files:
 # MAGIC %md
 # MAGIC ## Cell 0.5 — Bootstrap silver (αν λείπει)
 # MAGIC
-# MAGIC Αν έχει τρέξει η Άσκηση 3 ή 4, το silver υπάρχει — skip-άρει.
+# MAGIC Αν έχει εκτελεστεί η Άσκηση 3 ή 4, το silver υπάρχει ήδη και η εκτέλεση παραλείπεται.
 
 # COMMAND ----------
 
@@ -218,7 +218,7 @@ print(f"\n   Reduction: {num_files - num_files_after} files λιγότερα")
 # MAGIC
 # MAGIC **Best practice**:
 # MAGIC - ZORDER BY στα 1–4 πιο "hot" filter columns (αυτά που μπαίνουν συχνά σε WHERE)
-# MAGIC - Όχι σε high-cardinality cols (π.χ. ΑΦΜ — εκατομμύρια unique values, δεν boost-άρει)
+# MAGIC - Όχι σε high-cardinality cols (π.χ. ΑΦΜ — εκατομμύρια unique values, δεν επιφέρει βελτίωση)
 # MAGIC - Όχι σε low-cardinality cols με 2-3 values (π.χ. boolean — partition αντί ZORDER)
 
 # COMMAND ----------

@@ -37,7 +37,7 @@
 # MAGIC ## 📦 Cell 0 — Setup + Download CSVs από GitHub
 # MAGIC
 # MAGIC Δημιουργεί schema/volume και κατεβάζει τα 4 master CSVs απευθείας από το public repo.
-# MAGIC **Idempotent** — αν έχουν ήδη ανέβει manual, skip-άρει.
+# MAGIC **Idempotent** — αν τα αρχεία έχουν ήδη ανέβει χειροκίνητα, η λήψη παραλείπεται.
 
 # COMMAND ----------
 

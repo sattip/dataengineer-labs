@@ -45,7 +45,7 @@
 # MAGIC %md
 # MAGIC ## Cell 0 — Setup + Download από GitHub
 # MAGIC
-# MAGIC Δημιουργεί schema/volume και κατεβάζει τα 5 lab files. **Idempotent** — αν έχει ήδη τρέξει η Άσκηση 3 και τα αρχεία υπάρχουν, απλά skip-άρει.
+# MAGIC Δημιουργεί schema/volume και κατεβάζει τα 5 lab files. **Idempotent** — αν έχει ήδη εκτελεστεί η Άσκηση 3 και τα αρχεία υπάρχουν, η λήψη παραλείπεται.
 
 # COMMAND ----------
 
