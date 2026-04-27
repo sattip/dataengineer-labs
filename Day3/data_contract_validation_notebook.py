@@ -325,6 +325,19 @@ invalid_df.select("`ΔηλωσηID`", "`ΑΦΜ`", "`Ποσό_EUR`", "`Κατάσ
 from datetime import datetime
 from pyspark.sql import Row
 
+# Defensive: re-derive valid_df/invalid_df αν δεν υπάρχουν στο scope
+# (π.χ. όταν τρέχει το cell μεμονωμένα μετά από compute restart)
+try:
+    valid_df
+    invalid_df
+except NameError:
+    print("ℹ️  Re-deriving valid_df/invalid_df από raw_df + results...")
+    error_rules_quoted = [r["expression"] for r in results if r["severity"] == "error"]
+    combined_fail = " OR ".join([f"NOT ({e})" for e in error_rules_quoted])
+    invalid_df = raw_df.filter(combined_fail)
+    valid_df = raw_df.filter(f"NOT ({combined_fail})")
+    print(f"   ✅ Valid: {valid_df.count()}, Invalid: {invalid_df.count()}\n")
+
 # 1. Silver — only valid records
 valid_df.write.format("delta").mode("overwrite") \
     .saveAsTable("workspace.aade.tax_declarations_silver")
