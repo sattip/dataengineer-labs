@@ -245,29 +245,25 @@ for t in required_tables:
 
 # COMMAND ----------
 
-from pyspark.sql import Row
+# Type-safe approach: φτιάχνουμε bad batch ως SELECT από το ίδιο το silver,
+# αλλάζοντας μόνο τα fields που θέλουμε. Αυτό εγγυάται type compatibility.
+from pyspark.sql.functions import lit
 
-silver_cols = spark.table("workspace.aade.tax_declarations_silver").columns
+# Παίρνουμε 2 rows από το silver ως template, τα μετατρέπουμε σε bad records
+template = spark.table("workspace.aade.tax_declarations_silver").limit(2).toPandas()
+template_rows = template.to_dict("records")
 
-# Build bad rows με όλα τα columns που έχει το silver, default None για άγνωστα
-def make_bad(decl_id, afm, name, amount):
-    base = {c: None for c in silver_cols}
-    overrides = {
-        "ΔηλωσηID": decl_id,
-        "ΑΦΜ": afm,
-        "Επωνυμία": name,
-        "Ποσό_EUR": amount,
-        "Φορ_Ετος": 2024,
-    }
-    for col_name, val in overrides.items():
-        if col_name in base:
-            base[col_name] = val
-    return Row(**base)
+# Mark them as bad: high amount + flag στο Επωνυμία
+bad_specs = [
+    {"ΔηλωσηID": 99001, "Επωνυμία": "FAKE_RECORD_01", "Ποσό_EUR": 999999.0},
+    {"ΔηλωσηID": 99002, "Επωνυμία": "FAKE_RECORD_02", "Ποσό_EUR": 888888.0},
+]
+for row, override in zip(template_rows, bad_specs):
+    row.update(override)
 
-bad_batch = spark.createDataFrame([
-    make_bad(99001, "BAD_AFM_01", "FAKE_RECORD", 999999.0),
-    make_bad(99002, "BAD_AFM_02", "FAKE_RECORD", 888888.0),
-])
+# Convert back to Spark με matching schema
+silver_schema = spark.table("workspace.aade.tax_declarations_silver").schema
+bad_batch = spark.createDataFrame(template_rows, schema=silver_schema)
 
 # Append → νέα version στο Delta log
 bad_batch.write.format("delta").mode("append").saveAsTable("workspace.aade.tax_declarations_silver")
