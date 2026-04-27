@@ -94,12 +94,29 @@ curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Str
 
 In Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. Όλα τα notebooks είναι self-contained (Cell 0 setup + Cell 0.5 bootstrap αν χρειαστεί).
 
-### Day 4 — ML Lifecycle (ΑΑΔΕ Risk Scoring)
+### Day 4 — Feature Engineering & DevOps for Data
 
-| File | Size | Description |
-|---|---|---|
-| `Day4/kep_requests.csv` | 876 KB | 10,000 synthetic ΚΕΠ requests (με intentional leakage features) |
-| `Day4/taxpayer_features.csv` | 3.1 MB | 50,000 synthetic taxpayer features με `is_flagged` target |
+| File | Description |
+|---|---|
+| `Day4/Feature_Engineering_Notebook.py` | **Main lab** — 14 βήματα: imputation, 6 ΑΑΔΕ features, quality checks, Delta save, correlation ranking |
+| `Day4/Git_CICD_Example/` | **Git/CI/CD walkthrough** — clean_citizens.py + unit tests + GitHub Actions workflow + step-by-step README |
+| `Day4/kep_requests.csv` | 10,000 synthetic ΚΕΠ requests (με intentional leakage features) |
+| `Day4/taxpayer_features.csv` | 50,000 synthetic taxpayer features με `is_flagged` target |
+
+#### 🚀 Quick start — Day 4
+
+**Feature Engineering Notebook** (Databricks Free Edition, ~25-30'):
+```bash
+curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/Feature_Engineering_Notebook.py
+```
+Στο Databricks: **Workspace → Import → drag-drop → Run All**. Self-contained, no external dependencies.
+
+**Git/CI/CD Example** (στο τοπικό σας μηχάνημα, ~30'):
+```bash
+git clone https://github.com/sattip/dataengineer-labs.git
+cd dataengineer-labs/Day4/Git_CICD_Example
+# Διαβάστε το README.md για step-by-step walkthrough
+```
 
 ---
 

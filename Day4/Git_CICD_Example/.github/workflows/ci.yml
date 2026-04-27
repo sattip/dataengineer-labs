@@ -1,0 +1,25 @@
+name: CI
+
+# Τρέχει σε κάθε push & pull request
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Κατέβασε τον κώδικα
+      - uses: actions/checkout@v4
+
+      # 2. Στήσε Python 3.11
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Εγκατάσταση dependencies
+      - name: Install dependencies
+        run: |
+          pip install pyspark==3.5.0 pytest
+
+      # 4. Τρέξε tests
+      - name: Run tests
+        run: pytest -v
