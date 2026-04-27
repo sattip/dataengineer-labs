@@ -1,6 +1,13 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Day 3 — Data Contract Validation Pipeline
+# MAGIC # Άσκηση #3 — Data Contract Validation Pipeline (Ημέρα 3)
+# MAGIC
+# MAGIC ## 🔗 Source URL
+# MAGIC
+# MAGIC > **GitHub** (share this στο Zoom chat):
+# MAGIC > ```
+# MAGIC > https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/data_contract_validation_notebook.py
+# MAGIC > ```
 # MAGIC
 # MAGIC End-to-end demonstration of contract-driven data quality:
 # MAGIC `Volume CSV → Schema check → Quality rules → Valid Silver / Quarantine / Audit`
