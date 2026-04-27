@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Άσκηση #7 — Spark Structured Streaming + Delta (Ημέρα 3)
+# MAGIC # Άσκηση #7 — Spark Structured Streaming + Auto Loader (Ημέρα 3)
 # MAGIC
 # MAGIC ## 🔗 Source URL
 # MAGIC
@@ -16,38 +16,42 @@
 # MAGIC
 # MAGIC ## 🎯 Σενάριο
 # MAGIC
-# MAGIC Είσαι **Data Engineer στο Υπουργείο Υποδομών**. Έχεις IoT sensors σε γέφυρες της χώρας — κάθε sensor στέλνει **ανά λεπτό** μετρήσεις δονήσεων + θερμοκρασίας. Συνολικά ~5M events/day.
+# MAGIC Είσαι **Data Engineer στο Υπουργείο Υποδομών**. IoT sensors σε γέφυρες στέλνουν JSON files σε cloud storage (S3/ADLS). Πρέπει να:
 # MAGIC
-# MAGIC Πρέπει να φτιάξεις pipeline που:
-# MAGIC 1. **Δέχεται live events** (streaming ingestion)
-# MAGIC 2. Τα **γράφει σε Bronze Delta table**
-# MAGIC 3. Υπολογίζει **per-sensor aggregations** σε **5-min windows**
-# MAGIC 4. Ενεργοποιεί **alert** όταν δονήσεις > threshold
-# MAGIC 5. Κρατάει **historical batch view** πάνω στα ίδια δεδομένα (unified analytics)
+# MAGIC 1. **Διαβάζεις τα νέα files incremental** (όχι re-process των παλιών)
+# MAGIC 2. Τα **γράφεις σε Bronze Delta**
+# MAGIC 3. Υπολογίζεις **per-sensor aggregations**
+# MAGIC 4. Ενεργοποιείς **alert** όταν δονήσεις > threshold
+# MAGIC 5. Κρατάς **historical batch view** πάνω στα ίδια δεδομένα
 # MAGIC
-# MAGIC ## 🧠 Key concept: Delta = Unified Batch + Streaming
+# MAGIC ## 🧠 Key concepts
 # MAGIC
-# MAGIC Το **κορυφαίο feature** του Delta Lake: **το ίδιο table** μπορεί να:
-# MAGIC - Διαβάζεται streaming (`readStream`) — για live dashboards
-# MAGIC - Διαβάζεται batch (`spark.read.table`) — για historical analysis
-# MAGIC - Γράφεται streaming **και** batch ταυτόχρονα — Lambda architecture **χωρίς δύο pipelines**
+# MAGIC ### 1. Auto Loader (`cloudFiles`)
+# MAGIC Production pattern για ingestion από cloud storage. Auto-discover νέα files, schema inference, exactly-once.
 # MAGIC
-# MAGIC Σε vanilla Hadoop/Hive: χρειάζεσαι **Lambda architecture** = 2 codebases (batch + speed layer). Με Delta: **Kappa architecture** = 1 codebase.
+# MAGIC ### 2. `trigger(availableNow=True)`
+# MAGIC One-shot streaming run: «process όλα τα νέα data, stop». Σε Databricks Free Edition / Serverless είναι **το μόνο supported trigger** (continuous `processingTime` δεν υποστηρίζεται).
+# MAGIC Ιδανικό για **scheduled batch jobs** που χρησιμοποιούν streaming API για incremental processing.
+# MAGIC
+# MAGIC ### 3. Delta = Unified Batch + Streaming
+# MAGIC Το ίδιο Delta table είναι streamable (`readStream`) **και** queryable (`spark.sql`). **1 codebase**, όχι Lambda architecture.
 # MAGIC
 # MAGIC ## 📋 Notebook structure
 # MAGIC
-# MAGIC | Cell | Step | Time |
-# MAGIC |---|------|------|
-# MAGIC | 0 | Setup (schema, volume, checkpoint dir) | 30s |
-# MAGIC | 1 | Generate synthetic IoT events (rate source) | 5s |
-# MAGIC | 2 | Write streaming → Bronze Delta | 30s + 60s run |
-# MAGIC | 3 | Batch query πάνω στο Bronze (παράλληλα με stream) | 5s |
-# MAGIC | 4 | Streaming aggregation με watermark (events/min ανά sensor) | 30s + run |
-# MAGIC | 5 | Alert filter (high vibration → Slack-ready output) | 30s |
-# MAGIC | 6 | Stop streams + cleanup | 5s |
-# MAGIC | 7 | Production patterns (Auto Loader, Kafka, foreachBatch) | — |
+# MAGIC | Cell | Step |
+# MAGIC |---|------|
+# MAGIC | 0 | Setup (schema, volume, checkpoint, landing dir) |
+# MAGIC | 1 | Generate batch 1 of synthetic IoT JSON files (50 events) |
+# MAGIC | 2 | Auto Loader → Bronze Delta (incremental ingest) |
+# MAGIC | 3 | Batch query πάνω στο Bronze (unified analytics) |
+# MAGIC | 4 | Streaming aggregation με watermark + tumbling windows |
+# MAGIC | 5 | Alert stream (high vibration → Delta + Slack-ready) |
+# MAGIC | 6 | Generate batch 2 (50 more events) — δείξε incremental |
+# MAGIC | 7 | Re-run streams — process ΜΟΝΟ τα νέα files |
+# MAGIC | 8 | Cleanup (drop tables, remove checkpoints) |
+# MAGIC | 9 | Production patterns (continuous trigger, Kafka, foreachBatch) |
 # MAGIC
-# MAGIC ⚠️ **ΠΡΟΣΟΧΗ**: τα streaming queries τρέχουν **continuously**. Πρέπει να τα **σταματήσεις** όταν τελειώσεις (Cell 6) — αλλιώς τρώνε compute budget.
+# MAGIC ⚠️ Όλα τα streams χρησιμοποιούν `trigger(availableNow=True)` — **self-terminate**, όχι runaway compute.
 
 # COMMAND ----------
 
@@ -59,95 +63,112 @@
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
 spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
 
-# Streaming queries χρειάζονται checkpoint directory — fault tolerance
-CHECKPOINT_BASE = "/Volumes/workspace/aade/aade_data/_checkpoints"
-print(f"✅ Checkpoint base: {CHECKPOINT_BASE}")
+VOL = "/Volumes/workspace/aade/aade_data"
+LANDING = f"{VOL}/sensor_landing"
+CHECKPOINT_BASE = f"{VOL}/_checkpoints_streaming"
+SCHEMA_LOC = f"{VOL}/_schema_streaming"
 
-# Cleanup old checkpoints (idempotent re-run safety)
-dbutils.fs.rm(CHECKPOINT_BASE, recurse=True)
-dbutils.fs.mkdirs(CHECKPOINT_BASE)
+# Clean slate (idempotent re-runs)
+for path in [LANDING, CHECKPOINT_BASE, SCHEMA_LOC]:
+    dbutils.fs.rm(path, recurse=True)
+    dbutils.fs.mkdirs(path)
 
-# Drop old streaming tables αν υπάρχουν (clean slate)
-for t in ["bridge_sensors_bronze", "bridge_sensors_alerts"]:
+for t in ["bridge_sensors_bronze", "bridge_sensors_alerts", "bridge_sensors_agg"]:
     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
 
-print("✅ Setup ready. Schema/volume/checkpoint clean.")
+print(f"✅ Setup ready.")
+print(f"   Landing dir:      {LANDING}")
+print(f"   Checkpoint base:  {CHECKPOINT_BASE}")
+print(f"   Schema location:  {SCHEMA_LOC}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 1 — Generate synthetic IoT events
+# MAGIC ## Βήμα 1 — Generate batch 1 of synthetic events
 # MAGIC
-# MAGIC Δεν έχουμε real Kafka/Event Hubs. Χρησιμοποιούμε το **`rate` source** του Spark — generates events με σταθερό rowsPerSecond.
+# MAGIC Σε production, sensors push events σε cloud storage as JSON. Εδώ προσομοιώνουμε γράφοντας 50 events σε ένα JSON file.
 # MAGIC
-# MAGIC Πάνω από αυτό, προσομοιώνουμε bridge sensors:
-# MAGIC - **5 γέφυρες** (sensor_id 1–5)
-# MAGIC - Tυχαίες δονήσεις (vibration_hz) και θερμοκρασία (temp_c)
-# MAGIC - Κάποιες θα πέφτουν σε "alarm zone" (vibration > 8 Hz)
+# MAGIC **5 γέφυρες** (sensor_id 1–5), τυχαίες δονήσεις (vibration_hz 0–12) και θερμοκρασία (temp_c 15–35).
 
 # COMMAND ----------
 
-from pyspark.sql.functions import (
-    col, lit, rand, when, current_timestamp, expr, from_unixtime
-)
+import json, random, time
+from datetime import datetime, timedelta
 
-# rate source: ένα event ανά second, με incrementing value
-events_stream = (spark.readStream
-    .format("rate")
-    .option("rowsPerSecond", 10)  # 10 events/sec
-    .load()
-)
+random.seed(42)
 
-# Transform σε bridge sensor events
-sensor_stream = (events_stream
-    .withColumn("sensor_id", (col("value") % 5 + 1).cast("int"))
-    .withColumn("vibration_hz", (rand() * 12).cast("double"))   # 0-12 Hz
-    .withColumn("temp_c", (15 + rand() * 20).cast("double"))     # 15-35 °C
-    .withColumn("event_time", col("timestamp"))
-    .select("sensor_id", "event_time", "vibration_hz", "temp_c")
-)
+def generate_events(n, batch_id):
+    """Παράγει n synthetic events και τα γράφει σε JSON file στο landing dir."""
+    base_time = datetime.utcnow()
+    events = []
+    for i in range(n):
+        events.append({
+            "sensor_id": random.randint(1, 5),
+            "event_time": (base_time + timedelta(seconds=i)).isoformat(),
+            "vibration_hz": round(random.uniform(0, 12), 2),
+            "temp_c": round(random.uniform(15, 35), 1),
+        })
+    # Write as JSON Lines (1 record per line — Auto Loader friendly)
+    file_path = f"{LANDING}/batch_{batch_id}.json"
+    content = "\n".join(json.dumps(e) for e in events)
+    dbutils.fs.put(file_path, content, overwrite=True)
+    return file_path, len(events)
 
-print("✅ Streaming source defined: 10 events/sec, 5 sensors, vibration + temp")
+path, count = generate_events(50, batch_id=1)
+print(f"✅ Wrote {count} events to {path}")
+
+# Verify file landed
+files = dbutils.fs.ls(LANDING)
+for f in files:
+    print(f"   📄 {f.name}  ({f.size} bytes)")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 2 — Write streaming → Bronze Delta
+# MAGIC ## Βήμα 2 — Auto Loader → Bronze Delta
 # MAGIC
-# MAGIC Το stream γράφει σε **continuous mode** στο Bronze Delta table. **Trigger 10 sec** = κάθε 10 sec γίνεται μία νέα write.
+# MAGIC `cloudFiles` = Databricks Auto Loader. Production-grade ingestion από cloud storage:
+# MAGIC - **Incremental file discovery** — διαβάζει μόνο τα νέα files (μέσω checkpoint)
+# MAGIC - **Schema inference** — αυτόματα από το πρώτο file
+# MAGIC - **Exactly-once** — checkpoint-protected
+# MAGIC
+# MAGIC ### Trigger: `availableNow=True`
+# MAGIC One-shot run: «process όλα τα available files, stop». Self-terminates → no runaway compute.
 
 # COMMAND ----------
 
-bronze_query = (sensor_stream.writeStream
+bronze_stream = (spark.readStream
+    .format("cloudFiles")
+    .option("cloudFiles.format", "json")
+    .option("cloudFiles.schemaLocation", SCHEMA_LOC)
+    .option("cloudFiles.inferColumnTypes", "true")
+    .load(LANDING)
+)
+
+# Write με availableNow trigger — process current files, stop
+bronze_query = (bronze_stream.writeStream
     .format("delta")
     .outputMode("append")
     .option("checkpointLocation", f"{CHECKPOINT_BASE}/bronze")
-    .trigger(processingTime="10 seconds")
+    .trigger(availableNow=True)
     .toTable("workspace.aade.bridge_sensors_bronze")
 )
 
-print(f"✅ Bronze stream started. Query ID: {bronze_query.id}")
-print(f"   Status: {bronze_query.status}")
-print(f"\n⏳ Awaiting first batch (~15 sec)...")
+bronze_query.awaitTermination()  # Wait for one-shot to finish
 
-# Περιμένουμε λίγο για να γίνει το πρώτο batch
-import time
-time.sleep(20)
-
-# Check progress
-print(f"\n📊 Last progress: {bronze_query.lastProgress.get('numInputRows', 0) if bronze_query.lastProgress else 'no batch yet'} rows in last batch")
+count = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_bronze").collect()[0]["n"]
+print(f"✅ Bronze ingested: {count} events from batch 1")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 3 — Batch query πάνω στο Bronze (παράλληλα με stream)
+# MAGIC ## Βήμα 3 — Batch query πάνω στο Bronze (unified analytics)
 # MAGIC
-# MAGIC Εδώ δείχνεται το **unified analytics** του Delta. Ενώ το stream συνεχίζει να γράφει, εμείς διαβάζουμε σαν να ήταν σταθερό batch table.
+# MAGIC Παρόλο που γράφτηκε με streaming API, το table είναι κανονικό Delta. **Batch SQL** δουλεύει.
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Batch read πάνω σε Delta table που γεμίζει streaming
 # MAGIC SELECT
 # MAGIC   sensor_id,
 # MAGIC   COUNT(*) AS event_count,
@@ -163,29 +184,28 @@ print(f"\n📊 Last progress: {bronze_query.lastProgress.get('numInputRows', 0) 
 # MAGIC %md
 # MAGIC ## Βήμα 4 — Streaming aggregation με watermark
 # MAGIC
-# MAGIC ### Τι είναι watermark;
+# MAGIC ### Watermark: γιατί το χρειαζόμαστε;
 # MAGIC
-# MAGIC Σε streaming, events μπορούν να φτάσουν **late** (π.χ. network delay). Το **watermark** λέει στο Spark «μετά από X λεπτά μην περιμένεις πια — δώσε το αποτέλεσμα».
+# MAGIC Σε streaming, events μπορούν να φτάσουν **late** (network delay). Watermark λέει στο Spark «μετά από X λεπτά μην περιμένεις πια — κλείσε το window».
 # MAGIC
+# MAGIC ```python
+# MAGIC .withWatermark("event_time", "2 minutes")
 # MAGIC ```
-# MAGIC withWatermark("event_time", "2 minutes") = "για κάθε window, περίμενε
-# MAGIC                                            μέχρι και 2 min late events
-# MAGIC                                            πριν κλείσει το window"
-# MAGIC ```
-# MAGIC
-# MAGIC Χωρίς watermark, το Spark θα κρατούσε **όλα** τα windows σε μνήμη για πάντα → memory leak.
+# MAGIC Χωρίς αυτό: το Spark κρατάει **όλα** τα windows σε memory για πάντα → OOM.
 
 # COMMAND ----------
 
-from pyspark.sql.functions import window, avg, count
+from pyspark.sql.functions import (
+    col, lit, when, current_timestamp, window, avg, count, to_timestamp
+)
 
-# Source = ξανά διαβάζουμε το Bronze ως stream (ναι, μπορούμε!)
-bronze_stream = (spark.readStream
+# Read Bronze ως stream + windowed aggregation
+bronze_for_agg = (spark.readStream
     .format("delta")
-    .table("workspace.aade.bridge_sensors_bronze"))
+    .table("workspace.aade.bridge_sensors_bronze")
+    .withColumn("event_time", to_timestamp(col("event_time"))))
 
-# 1-min tumbling windows ανά sensor, με 2-min watermark
-agg_stream = (bronze_stream
+agg_stream = (bronze_for_agg
     .withWatermark("event_time", "2 minutes")
     .groupBy(
         window("event_time", "1 minute"),
@@ -198,25 +218,24 @@ agg_stream = (bronze_stream
     )
 )
 
-# Display live (refreshes κάθε λίγα δευτερόλεπτα)
-display_query = (agg_stream.writeStream
+# Write με availableNow + outputMode("append") — μόνο windows που έχουν "κλείσει"
+# (έχει περάσει το watermark)
+# Note: για demo με μικρά data, χρησιμοποιούμε complete mode + memory sink
+agg_query = (agg_stream.writeStream
     .format("memory")
     .queryName("live_aggregations")
     .outputMode("complete")
-    .trigger(processingTime="10 seconds")
+    .trigger(availableNow=True)
     .start()
 )
 
-print(f"✅ Aggregation stream started. Query ID: {display_query.id}")
-print("\n⏳ Wait 30 sec, then run the next cell to see live aggregations...")
-
-import time
-time.sleep(30)
+agg_query.awaitTermination()
+print(f"✅ Aggregation completed.")
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Live view του aggregation stream (memory sink)
+# MAGIC -- Live view: aggregations ανά sensor × 1-min window
 # MAGIC SELECT
 # MAGIC   window.start AS window_start,
 # MAGIC   sensor_id,
@@ -230,19 +249,17 @@ time.sleep(30)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 5 — Alert filter (high vibration)
+# MAGIC ## Βήμα 5 — Alert stream (high vibration)
 # MAGIC
-# MAGIC Επιχειρηματικός κανόνας: **vibration > 8 Hz = potential structural risk → alert**.
-# MAGIC
-# MAGIC Σε production, το `foreachBatch` θα έστελνε:
-# MAGIC - Slack notification
-# MAGIC - SMS στον engineer on-call
-# MAGIC - Insert σε ServiceNow ticket queue
+# MAGIC Επιχειρηματικός κανόνας: **vibration > 8 Hz → alert**. Σε production: foreachBatch → Slack / SMS / ServiceNow.
 
 # COMMAND ----------
 
-# Stream alerts → ξεχωριστό Delta table
-alerts_stream = (bronze_stream
+bronze_for_alerts = (spark.readStream
+    .format("delta")
+    .table("workspace.aade.bridge_sensors_bronze"))
+
+alerts_stream = (bronze_for_alerts
     .filter(col("vibration_hz") > 8.0)
     .withColumn("alert_severity",
         when(col("vibration_hz") > 10.0, lit("critical"))
@@ -254,24 +271,22 @@ alerts_query = (alerts_stream.writeStream
     .format("delta")
     .outputMode("append")
     .option("checkpointLocation", f"{CHECKPOINT_BASE}/alerts")
-    .trigger(processingTime="10 seconds")
+    .trigger(availableNow=True)
     .toTable("workspace.aade.bridge_sensors_alerts")
 )
 
-print(f"✅ Alerts stream started. Query ID: {alerts_query.id}")
+alerts_query.awaitTermination()
 
-import time
-time.sleep(20)
+alerts_count = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_alerts").collect()[0]["n"]
+print(f"✅ Alerts processed: {alerts_count}")
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Δες τα alerts που έχουν συμβεί
 # MAGIC SELECT
 # MAGIC   alert_severity,
 # MAGIC   sensor_id,
 # MAGIC   ROUND(vibration_hz, 2) AS vibration_hz,
-# MAGIC   event_time,
 # MAGIC   alert_time
 # MAGIC FROM workspace.aade.bridge_sensors_alerts
 # MAGIC ORDER BY alert_time DESC
@@ -280,7 +295,6 @@ time.sleep(20)
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Counts ανά severity
 # MAGIC SELECT alert_severity, COUNT(*) AS alert_count
 # MAGIC FROM workspace.aade.bridge_sensors_alerts
 # MAGIC GROUP BY alert_severity
@@ -288,63 +302,135 @@ time.sleep(20)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 6 — Stop streams + cleanup
+# MAGIC ## Βήμα 6 — Generate batch 2 (incremental demo)
 # MAGIC
-# MAGIC ⚠️ **ΥΠΟΧΡΕΩΤΙΚΟ**: τα streaming queries τρέχουν συνέχεια — αν δεν τα σταματήσεις, καταναλώνουν compute.
+# MAGIC Νέα events φτάνουν στο landing dir — π.χ. ένα νέο sensor batch κάθε ώρα σε production. Auto Loader **θα διαβάσει μόνο τα νέα files**, όχι ξανά τα παλιά.
 
 # COMMAND ----------
 
-# Stop όλα τα active streaming queries
-for q in spark.streams.active:
-    print(f"🛑 Stopping query: {q.name} ({q.id})")
-    q.stop()
+path, count = generate_events(50, batch_id=2)
+print(f"✅ Wrote {count} new events to {path}")
 
-# Wait να κλείσουν
-import time
-time.sleep(5)
-
-print(f"\n✅ Active streams μετά το stop: {len(spark.streams.active)}")
-
-# COMMAND ----------
-
-# Final τι γράφτηκε
-bronze_count = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_bronze").collect()[0]["n"]
-alerts_count = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_alerts").collect()[0]["n"]
-print(f"📊 Final counts:")
-print(f"   bridge_sensors_bronze: {bronze_count} events")
-print(f"   bridge_sensors_alerts: {alerts_count} alerts")
-print(f"\n   Alert rate: {100.0 * alerts_count / bronze_count if bronze_count else 0:.1f}% (expected ~30% since vibration > 8 Hz σε ομοιόμορφη 0-12)")
+# Επιβεβαίωση: τώρα βλέπουμε 2 files στο landing
+files = dbutils.fs.ls(LANDING)
+print(f"\n📂 Files in landing: {len(files)}")
+for f in files:
+    print(f"   📄 {f.name}  ({f.size} bytes)")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 7 — Production patterns
+# MAGIC ## Βήμα 7 — Re-run streams — Auto Loader picks up ONLY new files
 # MAGIC
-# MAGIC ### Pattern 1: Auto Loader (αντί για rate source)
+# MAGIC Εκτελούμε ξανά τα ίδια streams. Λόγω checkpoint, Auto Loader **παραλείπει** τα ήδη-διαβασμένα files και διαβάζει μόνο `batch_2.json`.
+
+# COMMAND ----------
+
+bronze_count_before = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_bronze").collect()[0]["n"]
+
+# Re-run Bronze stream (ίδιο checkpoint → incremental)
+bronze_stream_2 = (spark.readStream
+    .format("cloudFiles")
+    .option("cloudFiles.format", "json")
+    .option("cloudFiles.schemaLocation", SCHEMA_LOC)
+    .option("cloudFiles.inferColumnTypes", "true")
+    .load(LANDING))
+
+(bronze_stream_2.writeStream
+    .format("delta")
+    .outputMode("append")
+    .option("checkpointLocation", f"{CHECKPOINT_BASE}/bronze")
+    .trigger(availableNow=True)
+    .toTable("workspace.aade.bridge_sensors_bronze")
+).awaitTermination()
+
+bronze_count_after = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_bronze").collect()[0]["n"]
+new_records = bronze_count_after - bronze_count_before
+
+print(f"📊 Bronze before run 2: {bronze_count_before}")
+print(f"📊 Bronze after run 2:  {bronze_count_after}")
+print(f"📊 New records ingested: {new_records}")
+assert new_records == 50, f"Expected 50 new, got {new_records}"
+print(f"\n✅ Auto Loader διάβασε ΜΟΝΟ τα νέα files (50, όχι 100). Incremental works.")
+
+# COMMAND ----------
+
+# Re-run alerts stream (ίδιο pattern)
+bronze_for_alerts_2 = (spark.readStream
+    .format("delta")
+    .option("readChangeFeed", "false")  # explicit, default
+    .table("workspace.aade.bridge_sensors_bronze"))
+
+(bronze_for_alerts_2
+    .filter(col("vibration_hz") > 8.0)
+    .withColumn("alert_severity",
+        when(col("vibration_hz") > 10.0, lit("critical"))
+        .otherwise(lit("warning")))
+    .withColumn("alert_time", current_timestamp())
+    .writeStream
+    .format("delta")
+    .outputMode("append")
+    .option("checkpointLocation", f"{CHECKPOINT_BASE}/alerts")
+    .trigger(availableNow=True)
+    .toTable("workspace.aade.bridge_sensors_alerts")
+).awaitTermination()
+
+alerts_total = spark.sql("SELECT COUNT(*) AS n FROM workspace.aade.bridge_sensors_alerts").collect()[0]["n"]
+print(f"📊 Total alerts μετά τα 2 batches: {alerts_total}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Βήμα 8 — Cleanup
 # MAGIC
-# MAGIC Σε production, αρχεία πέφτουν σε cloud storage (S3/ADLS/GCS). **Auto Loader** ανιχνεύει νέα files αυτόματα:
+# MAGIC Sanity check ότι δεν τρέχουν active streams. Με `availableNow`, τα streams self-terminate, αλλά καλό είναι να τσεκάρουμε.
+
+# COMMAND ----------
+
+active = spark.streams.active
+print(f"Active streams: {len(active)}")
+for q in active:
+    print(f"   🛑 Stopping: {q.name} ({q.id})")
+    q.stop()
+
+print(f"\n✅ Cleanup complete.")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Βήμα 9 — Production patterns
 # MAGIC
+# MAGIC ### Pattern 1: Continuous streaming (όχι σε Free Edition Serverless)
+# MAGIC
+# MAGIC Σε **dedicated cluster** (όχι Serverless), μπορείς να χρησιμοποιήσεις `processingTime` trigger για continuous mode:
 # MAGIC ```python
-# MAGIC stream = (spark.readStream
-# MAGIC   .format("cloudFiles")
-# MAGIC   .option("cloudFiles.format", "json")
-# MAGIC   .option("cloudFiles.schemaLocation", "/Volumes/.../_schema")
-# MAGIC   .load("/Volumes/.../landing/"))
+# MAGIC .trigger(processingTime="10 seconds")  # Free Edition Serverless ΔΕΝ το υποστηρίζει
 # MAGIC ```
 # MAGIC
-# MAGIC Πλεονεκτήματα: incremental file discovery (δεν re-scan-άρει όλα), schema inference, scale.
+# MAGIC Free Edition limitation: μόνο `availableNow` (one-shot) ή `Once` (deprecated).
 # MAGIC
-# MAGIC ### Pattern 2: Kafka source
+# MAGIC ### Pattern 2: Scheduled `availableNow` jobs (production-friendly)
+# MAGIC
+# MAGIC Δημιούργησε Databricks Job που τρέχει το notebook **κάθε 5 min**. Κάθε run:
+# MAGIC - Auto Loader βρίσκει νέα files
+# MAGIC - Process-άρει με streaming API
+# MAGIC - Self-terminates
+# MAGIC - Επόμενο run: επανάληψη
+# MAGIC
+# MAGIC Πλεονέκτημα: cost = O(work), όχι O(continuous compute).
+# MAGIC
+# MAGIC ### Pattern 3: Kafka source
 # MAGIC
 # MAGIC ```python
 # MAGIC stream = (spark.readStream
 # MAGIC   .format("kafka")
-# MAGIC   .option("kafka.bootstrap.servers", "broker1:9092,broker2:9092")
+# MAGIC   .option("kafka.bootstrap.servers", "broker:9092")
 # MAGIC   .option("subscribe", "bridge_sensors")
+# MAGIC   .option("startingOffsets", "earliest")
 # MAGIC   .load())
 # MAGIC ```
 # MAGIC
-# MAGIC ### Pattern 3: foreachBatch (custom output)
+# MAGIC ### Pattern 4: foreachBatch (custom output)
 # MAGIC
 # MAGIC ```python
 # MAGIC def send_alerts_to_slack(batch_df, batch_id):
@@ -352,42 +438,38 @@ print(f"\n   Alert rate: {100.0 * alerts_count / bronze_count if bronze_count el
 # MAGIC     for row in critical:
 # MAGIC         requests.post(SLACK_WEBHOOK, json={"text": f"🚨 Sensor {row.sensor_id}"})
 # MAGIC
-# MAGIC alerts_stream.writeStream.foreachBatch(send_alerts_to_slack).start()
+# MAGIC alerts_stream.writeStream.foreachBatch(send_alerts_to_slack).trigger(availableNow=True).start()
 # MAGIC ```
-# MAGIC
-# MAGIC ### Pattern 4: Trigger types
-# MAGIC
-# MAGIC | Trigger | Use case |
-# MAGIC |---|---|
-# MAGIC | `processingTime="10 seconds"` | Soft real-time (default) |
-# MAGIC | `availableNow=True` | Run once, process όλα τα νέα data, stop |
-# MAGIC | `continuous="1 second"` | Continuous mode (experimental, sub-second latency) |
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## 🎉 Wrap-up
 # MAGIC
-# MAGIC | Concept | Command | Use case |
-# MAGIC |---|---|---|
-# MAGIC | **Streaming source** | `spark.readStream.format("rate"/"kafka"/"cloudFiles")` | Synthetic / Kafka / file-based |
-# MAGIC | **Streaming sink** | `.writeStream.format("delta").toTable(...)` | Append to Bronze/Silver/Gold |
-# MAGIC | **Watermark** | `.withWatermark("col", "X minutes")` | Bound late events |
-# MAGIC | **Window aggregation** | `.groupBy(window("col", "1 minute"))` | Time-bucketed metrics |
-# MAGIC | **Trigger** | `.trigger(processingTime="10 seconds")` | Control batch frequency |
-# MAGIC | **Stop streams** | `for q in spark.streams.active: q.stop()` | **ΠΑΝΤΑ** στο τέλος |
+# MAGIC | Concept | Command |
+# MAGIC |---|---|
+# MAGIC | Auto Loader (cloud storage ingest) | `format("cloudFiles")` |
+# MAGIC | One-shot streaming (Free Edition friendly) | `trigger(availableNow=True)` |
+# MAGIC | Continuous streaming (dedicated clusters) | `trigger(processingTime="X seconds")` |
+# MAGIC | Watermark (bound late events) | `withWatermark("col", "X minutes")` |
+# MAGIC | Window aggregation | `groupBy(window("col", "1 minute"))` |
+# MAGIC | Wait for one-shot completion | `query.awaitTermination()` |
 # MAGIC
-# MAGIC ### Unified batch + streaming
+# MAGIC ### Key takeaway
 # MAGIC
-# MAGIC Το ίδιο `bridge_sensors_bronze` Delta table είναι:
-# MAGIC - **Streamable** (`readStream` → live aggregations, alerts)
-# MAGIC - **Queryable** (`spark.sql` → ad-hoc analytics, BI dashboards)
-# MAGIC - **Time-travelable** (`VERSION AS OF` → historical reproducibility)
+# MAGIC **`trigger(availableNow=True)` + scheduled job = batch-style cost με streaming-style code**.
 # MAGIC
-# MAGIC **Ένα table, τρία usage patterns** — αυτό είναι το Delta promise.
+# MAGIC Σε real production:
+# MAGIC - Files πέφτουν σε S3/ADLS
+# MAGIC - Databricks Job τρέχει κάθε 5–60 min
+# MAGIC - Auto Loader picks up incremental
+# MAGIC - Bronze → Silver → Gold αλυσίδα γεμίζει αυτόματα
+# MAGIC - Zero manual file tracking
 # MAGIC
 # MAGIC ### Κλειστή ερώτηση για τους trainees
 # MAGIC
-# MAGIC > "Σε Lambda architecture έχεις 2 codebases — batch (Hive/Spark batch) + speed (Storm/Flink). Πόσος κώδικας θα χρειαζόταν για το ίδιο pipeline σε Delta;"
+# MAGIC > "Πότε προτιμάς `availableNow` και πότε `processingTime`;"
 # MAGIC
-# MAGIC **Απάντηση**: **Ένα notebook**. Το Delta unified batch+streaming επιτρέπει Kappa architecture — single codebase, μόνο διαφορετικά read/write modes.
+# MAGIC **Απάντηση**:
+# MAGIC - **availableNow** = scheduled batch jobs (cost-effective, ιδανικό για >5 min latency)
+# MAGIC - **processingTime** = continuous, sub-minute latency (ακριβότερο, dedicated cluster only)
