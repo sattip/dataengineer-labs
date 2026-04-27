@@ -171,27 +171,37 @@ print(f"✅ INSERT: 3 νέες δηλώσεις προστέθηκαν στο si
 # MAGIC %md
 # MAGIC ## Βήμα 4 — Simulate UPDATE (διόρθωση ποσού σε υπάρχουσα δήλωση)
 # MAGIC
-# MAGIC Φορολογικός υπάλληλος εντόπισε λάθος σε δήλωση ID 9001 — διορθώνει το `Ποσό_EUR` σε διπλάσιο.
+# MAGIC Φορολογικός υπάλληλος εντόπισε λάθος σε δήλωση ID 1 — διορθώνει το `Ποσό_EUR` σε διπλάσιο.
+# MAGIC
+# MAGIC > **Note**: το CSV έχει IDs 1–300. Επιλέγουμε ID 1 ώστε το UPDATE να βρει σίγουρα 1 row.
+
+# COMMAND ----------
+
+# Verify ότι το ID που πρόκειται να update υπάρχει
+target_id = 1
+exists = spark.sql(f"SELECT COUNT(*) AS n FROM workspace.aade.tax_declarations_silver WHERE `ΔηλωσηID` = {target_id}").collect()[0]["n"]
+assert exists > 0, f"ΔηλωσηID = {target_id} δεν υπάρχει στο silver — το UPDATE θα επηρεάσει 0 rows"
+print(f"✅ ΔηλωσηID = {target_id} υπάρχει ({exists} row). Συνεχίζουμε στο UPDATE.")
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC UPDATE workspace.aade.tax_declarations_silver
 # MAGIC SET `Ποσό_EUR` = `Ποσό_EUR` * 2
-# MAGIC WHERE `ΔηλωσηID` = 9001
+# MAGIC WHERE `ΔηλωσηID` = 1
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Βήμα 5 — Simulate DELETE (ακύρωση δήλωσης)
 # MAGIC
-# MAGIC Φορολογούμενος ακύρωσε τη δήλωση ID 9002 — διαγραφή.
+# MAGIC Φορολογούμενος ακύρωσε τη δήλωση ID 2 — διαγραφή.
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC DELETE FROM workspace.aade.tax_declarations_silver
-# MAGIC WHERE `ΔηλωσηID` = 9002
+# MAGIC WHERE `ΔηλωσηID` = 2
 
 # COMMAND ----------
 
