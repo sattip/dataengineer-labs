@@ -94,24 +94,30 @@ curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day3/Str
 
 In Databricks: **Workspace → Right-click → Import → drag-drop → Run All**. Όλα τα notebooks είναι self-contained (Cell 0 setup + Cell 0.5 bootstrap αν χρειαστεί).
 
-### Day 4 — Feature Engineering & DevOps for Data
+### Day 4 — Feature Engineering, ML Training & DevOps for Data
 
 | File | Description |
 |---|---|
-| `Day4/Feature_Engineering_Notebook.py` | **Main lab** — 14 βήματα: imputation, 6 ΑΑΔΕ features, quality checks, Delta save, correlation ranking |
-| `Day4/Git_CICD_Example/` | **Git/CI/CD walkthrough** — clean_citizens.py + unit tests + GitHub Actions workflow + step-by-step README |
+| `Day4/Feature_Engineering_Notebook.py` | **Lab 1** — 14 βήματα: imputation, 6 ΑΑΔΕ features, quality checks, Delta save, correlation ranking |
+| `Day4/ML_Model_Notebook.py` | **Lab 2** — Train Random Forest για fraud detection (50K records, stratified split, MLflow tracking, feature importance) |
+| `Day4/Git_CICD_Example/` | **Lab 3** — Git/CI/CD walkthrough (clean_citizens.py + unit tests + GitHub Actions workflow + README) |
 | `Day4/kep_requests.csv` | 10,000 synthetic ΚΕΠ requests (με intentional leakage features) |
-| `Day4/taxpayer_features.csv` | 50,000 synthetic taxpayer features με `is_flagged` target |
+| `Day4/taxpayer_features.csv` | 50,000 synthetic taxpayer features με `is_flagged` target — used by `ML_Model_Notebook.py` |
 
 #### 🚀 Quick start — Day 4
 
-**Feature Engineering Notebook** (Databricks Free Edition, ~25-30'):
-```bash
-curl -O https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/Feature_Engineering_Notebook.py
+**Lab 1: Feature Engineering** (Databricks Free Edition, ~25-30'):
 ```
-Στο Databricks: **Workspace → Import → drag-drop → Run All**. Self-contained, no external dependencies.
+https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/Feature_Engineering_Notebook.py
+```
 
-**Git/CI/CD Example** (στο τοπικό σας μηχάνημα, ~30'):
+**Lab 2: ML Model Training** (Databricks Free Edition, ~20-25'):
+```
+https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/ML_Model_Notebook.py
+```
+Στο Databricks: **Workspace → Import → drag-drop → Run All**. Αυτο-κατεβάζει το CSV.
+
+**Lab 3: Git/CI/CD Example** (στο τοπικό σας μηχάνημα, ~30'):
 ```bash
 git clone https://github.com/sattip/dataengineer-labs.git
 cd dataengineer-labs/Day4/Git_CICD_Example
