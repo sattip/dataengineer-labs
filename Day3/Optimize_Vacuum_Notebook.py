@@ -166,7 +166,7 @@ start = time.time()
 result_before = spark.sql("""
   SELECT COUNT(*) AS cnt
   FROM workspace.aade.tax_declarations_silver
-  WHERE Κατηγορία_Φόρου = 'ΦΠΑ'
+  WHERE `Κατηγορία_Φόρου` = 'ΦΠΑ'
 """).collect()
 elapsed_before = time.time() - start
 
@@ -213,7 +213,7 @@ print(f"\n   Reduction: {num_files - num_files_after} files λιγότερα")
 # MAGIC
 # MAGIC **Πώς δουλεύει**:
 # MAGIC - Co-locates rows με ίδιες τιμές στο ZORDER column μαζί στα ίδια Parquet files
-# MAGIC - Όταν κάνεις `WHERE Κατηγορία_Φόρου = 'ΦΠΑ'`, το Spark διαβάζει **μόνο** τα files που έχουν 'ΦΠΑ' (data skipping via min/max stats)
+# MAGIC - Όταν κάνεις `WHERE \`Κατηγορία_Φόρου\` = 'ΦΠΑ'`, το Spark διαβάζει **μόνο** τα files που έχουν 'ΦΠΑ' (data skipping via min/max stats)
 # MAGIC - Σε large tables: 10–100× speedup
 # MAGIC
 # MAGIC **Best practice**:
@@ -225,7 +225,7 @@ print(f"\n   Reduction: {num_files - num_files_after} files λιγότερα")
 
 # MAGIC %sql
 # MAGIC OPTIMIZE workspace.aade.tax_declarations_silver
-# MAGIC ZORDER BY (Κατηγορία_Φόρου, Φορ_Ετος)
+# MAGIC ZORDER BY (`Κατηγορία_Φόρου`, `Φορ_Ετος`)
 
 # COMMAND ----------
 
@@ -238,7 +238,7 @@ start = time.time()
 result_after = spark.sql("""
   SELECT COUNT(*) AS cnt
   FROM workspace.aade.tax_declarations_silver
-  WHERE Κατηγορία_Φόρου = 'ΦΠΑ'
+  WHERE `Κατηγορία_Φόρου` = 'ΦΠΑ'
 """).collect()
 elapsed_after = time.time() - start
 
