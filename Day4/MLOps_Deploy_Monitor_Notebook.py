@@ -330,8 +330,7 @@ else:
 from pyspark.sql.functions import struct, current_timestamp, sha2, concat_ws, col, lit
 from pyspark.sql.types import DoubleType
 
-# Φορτώνουμε το μοντέλο ως Spark UDF (για παραλληλισμό)
-# Σε Free Edition χρησιμοποιούμε runs:/ URI απευθείας (registry δεν δουλεύει)
+# Επιλογή URI ανάλογα με το mode
 if not USE_REGISTRY:
     prod_model_uri = f"runs:/{run_id}/model"
 elif USE_UC:
@@ -339,6 +338,11 @@ elif USE_UC:
 else:
     prod_model_uri = f"models:/{model_name}/Production"
 
+# Δοκιμάζουμε spark_udf πρώτα (production way).
+# Αν αποτύχει (Spark Connect quirks σε Free Edition), fallback σε pandas.
+USE_SPARK_UDF = False
+predict_udf = None
+loaded_pandas_model = None
 try:
     predict_udf = mlflow.pyfunc.spark_udf(
         spark,
@@ -346,44 +350,54 @@ try:
         result_type=DoubleType(),
         env_manager="local",
     )
-    print(f"✓ Model loaded as spark_udf από: {prod_model_uri}")
+    USE_SPARK_UDF = True
+    print(f"✓ Model loaded ως spark_udf: {prod_model_uri}")
 except Exception as e:
-    # Fallback σε run-uri αν το registry-based load αποτύχει
-    print(f"⚠️  Load απέτυχε, fallback σε runs URI: {type(e).__name__}")
-    prod_model_uri = f"runs:/{run_id}/model"
-    predict_udf = mlflow.pyfunc.spark_udf(
-        spark,
-        model_uri=prod_model_uri,
-        result_type=DoubleType(),
-        env_manager="local",
+    print(f"⚠️  spark_udf δεν είναι διαθέσιμο σε αυτό το environment: {type(e).__name__}")
+    print("   Fallback σε pandas-based batch scoring.")
+    try:
+        loaded_pandas_model = mlflow.pyfunc.load_model(prod_model_uri)
+    except Exception:
+        loaded_pandas_model = mlflow.pyfunc.load_model(f"runs:/{run_id}/model")
+    print(f"✓ Model loaded ως pandas pyfunc")
+
+if USE_SPARK_UDF:
+    # Production path: παραλληλοποιημένο scoring με Spark UDF
+    features_sdf = spark.read.csv(local_path, header=True, inferSchema=True)
+    scored = (
+        features_sdf
+        .withColumn("risk_score", predict_udf(struct(*[col(f) for f in features])))
+        .withColumn("scored_at", current_timestamp())
+        .withColumn("model_version", lit(str(mv.version)))
+    )
+    audit = scored.withColumn(
+        "input_hash",
+        sha2(concat_ws("|", *[col(f).cast("string") for f in features]), 256),
+    ).select(
+        "afm" if "afm" in scored.columns else features[0],
+        "scored_at",
+        "model_version",
+        "risk_score",
+        "input_hash",
+    )
+else:
+    # Free Edition path: pandas-based scoring, μετά Spark write
+    import hashlib
+    pdf = pd.read_csv(local_path)
+    pdf_features = pdf[features].fillna(pdf[features].median(numeric_only=True))
+    pdf["risk_score"] = loaded_pandas_model.predict(pdf_features)
+    pdf["scored_at"] = pd.Timestamp.utcnow()
+    pdf["model_version"] = str(mv.version)
+    pdf["input_hash"] = pdf_features.apply(
+        lambda r: hashlib.sha256("|".join(map(str, r.values)).encode()).hexdigest(),
+        axis=1,
+    )
+    scored = spark.createDataFrame(pdf.drop(columns=["input_hash"]))
+    afm_col = "afm" if "afm" in pdf.columns else features[0]
+    audit = spark.createDataFrame(
+        pdf[[afm_col, "scored_at", "model_version", "risk_score", "input_hash"]]
     )
 
-# Φορτώνουμε το feature store table
-features_sdf = spark.read.csv(local_path, header=True, inferSchema=True)
-
-# Apply prediction
-scored = features_sdf.withColumn(
-    "risk_score",
-    predict_udf(struct(*[col(f) for f in features])),
-).withColumn(
-    "scored_at", current_timestamp(),
-).withColumn(
-    "model_version", lit(str(mv.version)),
-)
-
-# Audit log: hash των inputs (για EU AI Act compliance)
-audit = scored.withColumn(
-    "input_hash",
-    sha2(concat_ws("|", *[col(f).cast("string") for f in features]), 256),
-).select(
-    "afm" if "afm" in scored.columns else features[0],
-    "scored_at",
-    "model_version",
-    "risk_score",
-    "input_hash",
-)
-
-# Save predictions
 scored.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.risk_predictions")
 audit.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.prediction_audit")
 
