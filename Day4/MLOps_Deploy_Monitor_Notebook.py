@@ -92,7 +92,9 @@ from sklearn.metrics import roc_auc_score, classification_report
 import mlflow
 import mlflow.sklearn
 
-mlflow.set_experiment("/Users/lab4-mlops-deploy")
+# Δεν καλούμε mlflow.set_experiment() ρητά — η Databricks ορίζει αυτόματα
+# το notebook path ως experiment. Σε Free Edition / Serverless το explicit
+# set_experiment() καλεί spark.conf για το registry URI και σπάει.
 
 df = pd.read_csv(local_path)
 
