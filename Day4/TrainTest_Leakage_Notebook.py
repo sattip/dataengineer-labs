@@ -34,12 +34,12 @@
 import urllib.request
 import os
 
-# Unity Catalog Volume path (αντί για /tmp).
-# Προαπαίτηση: catalog `aade` με schema `default` και volume `lab_data` (managed).
-# Αν δεν υπάρχει, δημιουργείστε το με:
-#   CREATE CATALOG IF NOT EXISTS aade;
-#   CREATE SCHEMA  IF NOT EXISTS aade.default;
-#   CREATE VOLUME  IF NOT EXISTS aade.default.lab_data;
+# Unity Catalog Volume setup (αντί για /tmp).
+# Δημιουργία catalog/schema/volume αν δεν υπάρχουν (idempotent).
+spark.sql("CREATE CATALOG IF NOT EXISTS aade")
+spark.sql("CREATE SCHEMA  IF NOT EXISTS aade.default")
+spark.sql("CREATE VOLUME  IF NOT EXISTS aade.default.lab_data")
+
 volume_dir = "/Volumes/aade/default/lab_data"
 os.makedirs(volume_dir, exist_ok=True)
 
