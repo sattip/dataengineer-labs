@@ -73,7 +73,7 @@ import urllib.request
 # spark.conf.get('spark.mlflow.modelRegistryUri') και σπάει με
 # CONFIG_NOT_AVAILABLE. Με το env var, το mlflow short-circuits και
 # δεν φτάνει ποτέ στο spark.conf call.
-os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
+os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 
 # Unity Catalog setup (idempotent)
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
@@ -166,40 +166,36 @@ from mlflow.tracking import MlflowClient
 # Auto-detect: αν τρέχουμε σε Spark Connect (Free Edition / Serverless) και
 # το spark.mlflow.modelRegistryUri δεν είναι διαθέσιμο, dropάρουμε σε
 # in-run mode και δείχνουμε τη ροή αλλιώς.
+# Επιχειρούμε UC registration. Αν αποτύχει σε Free Edition/Serverless workspace,
+# fallback σε in-run mode όπου το μοντέλο φορτώνεται από runs:/run_id/model.
 USE_REGISTRY = True
-USE_UC = False
-model_name = "aade_risk_scorer"  # default 1-part name για workspace registry
-
-# Test αν το registry config είναι διαθέσιμο πριν προσπαθήσουμε register
-try:
-    _test = spark.conf.get("spark.mlflow.modelRegistryUri")
-    USE_UC = True
-    model_name = "workspace.aade.aade_risk_scorer"
-    print("✓ UC Model Registry mode — modelRegistryUri available")
-except Exception as e:
-    err_str = str(e)
-    if "CONFIG_NOT_AVAILABLE" in err_str or "modelRegistryUri" in err_str:
-        # Free Edition / Serverless: ούτε UC ούτε workspace registry
-        USE_REGISTRY = False
-        print("⚠️  Model Registry δεν είναι διαθέσιμο σε αυτό το workspace (Free Edition)")
-        print("   Συνεχίζουμε σε in-run mode — το μοντέλο φορτώνεται από runs:/run_id/model")
-    else:
-        # Κάποιο άλλο error — δοκιμάζουμε workspace registry
-        print(f"⚠️  Spark Connect issue, switching σε workspace registry: {type(e).__name__}")
+USE_UC = True  # Default για UC-enabled workspaces (αν αποτύχει, dropάρει σε False παρακάτω)
+model_name = "workspace.aade.aade_risk_scorer"
 
 client = MlflowClient()
 
 # Register (ή skip αν registry not available)
 mv = None
-if USE_REGISTRY:
-    model_uri = f"runs:/{run_id}/model"
+model_uri = f"runs:/{run_id}/model"
+try:
+    mv = mlflow.register_model(model_uri=model_uri, name=model_name)
+    print(f"✓ Registered στο UC: {model_name} version {mv.version}")
+except Exception as e:
+    err_str = str(e)
+    print(f"⚠️  UC registration απέτυχε: {type(e).__name__}: {err_str[:200]}")
+    # Δοκιμάζουμε legacy workspace registry
     try:
+        os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
+        mlflow.set_registry_uri("databricks")
+        client = MlflowClient()
+        model_name = "aade_risk_scorer"
+        USE_UC = False
         mv = mlflow.register_model(model_uri=model_uri, name=model_name)
-        print(f"✓ Registered: {model_name} version {mv.version}")
-    except Exception as e:
+        print(f"✓ Registered στο workspace registry: {model_name} version {mv.version}")
+    except Exception as e2:
         USE_REGISTRY = False
-        print(f"⚠️  Model registration failed: {type(e).__name__}")
-        print("   Switching σε in-run mode")
+        print(f"⚠️  Registry εντελώς disabled: {type(e2).__name__}")
+        print("   Συνεχίζουμε σε in-run mode — model URI: runs:/run_id/model")
 
 # Demo placeholder version όταν registry δεν δουλεύει
 if mv is None:
@@ -233,9 +229,15 @@ print(f"✓ Tag set: stage=staging")
 
 # COMMAND ----------
 
-print("=== Registered model versions ===")
-for v in client.search_model_versions(f"name='{model_name}'"):
-    print(f"  → version {v.version} | run_id: {v.run_id} | tags: {v.tags}")
+if USE_REGISTRY:
+    try:
+        print("=== Registered model versions ===")
+        for v in client.search_model_versions(f"name='{model_name}'"):
+            print(f"  → version {v.version} | run_id: {v.run_id} | tags: {v.tags}")
+    except Exception as e:
+        print(f"⚠️  search_model_versions skipped: {type(e).__name__}: {str(e)[:200]}")
+else:
+    print("⚠️  Registry not available — skipping search_model_versions demo")
 
 # COMMAND ----------
 
