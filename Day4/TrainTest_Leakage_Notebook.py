@@ -32,11 +32,21 @@
 # COMMAND ----------
 
 import urllib.request
+import os
+
+# Unity Catalog Volume path (αντί για /tmp).
+# Προαπαίτηση: catalog `aade` με schema `default` και volume `lab_data` (managed).
+# Αν δεν υπάρχει, δημιουργείστε το με:
+#   CREATE CATALOG IF NOT EXISTS aade;
+#   CREATE SCHEMA  IF NOT EXISTS aade.default;
+#   CREATE VOLUME  IF NOT EXISTS aade.default.lab_data;
+volume_dir = "/Volumes/aade/default/lab_data"
+os.makedirs(volume_dir, exist_ok=True)
 
 url = "https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/kep_requests.csv"
-local = "/tmp/kep_requests.csv"
+local = f"{volume_dir}/kep_requests.csv"
 urllib.request.urlretrieve(url, local)
-print(f"✓ Downloaded: {local}")
+print(f"✓ Downloaded to Volume: {local}")
 
 # COMMAND ----------
 
@@ -282,9 +292,11 @@ print(f"\n=== Final splits για παράδοση στον DS ===")
 print(f"Train rows: {train_clean.count():,}")
 print(f"Test rows:  {test_clean.count():,}")
 
-# Save (optional — αν θες να τα κρατήσεις)
-# train_clean.write.format("delta").mode("overwrite").saveAsTable("aade.kep_train_clean")
-# test_clean.write.format("delta").mode("overwrite").saveAsTable("aade.kep_test_clean")
+# Save στο Unity Catalog (catalog `aade`, schema `default`)
+# Σχόλιο: αν τρέχετε σε Free Edition / preview χωρίς δικαιώματα δημιουργίας tables,
+# αφήστε τα παρακάτω σχολιασμένα και χρησιμοποιήστε τα DataFrames in-memory.
+# train_clean.write.format("delta").mode("overwrite").saveAsTable("aade.default.kep_train_clean")
+# test_clean.write.format("delta").mode("overwrite").saveAsTable("aade.default.kep_test_clean")
 
 print("\n✓ Dataset έτοιμο για ML training (χωρίς leakage)")
 
