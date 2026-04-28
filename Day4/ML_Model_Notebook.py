@@ -35,11 +35,19 @@
 # COMMAND ----------
 
 import urllib.request
+import os
+
+# Unity Catalog Volume setup (αντί για /tmp). Idempotent.
+spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
+spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
+
+volume_dir = "/Volumes/workspace/aade/aade_data"
+os.makedirs(volume_dir, exist_ok=True)
 
 url = "https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/taxpayer_features.csv"
-local_path = "/tmp/taxpayer_features.csv"
+local_path = f"{volume_dir}/taxpayer_features.csv"
 urllib.request.urlretrieve(url, local_path)
-print(f"✓ Κατέβηκε: {local_path}")
+print(f"✓ Κατέβηκε στο Volume: {local_path}")
 
 # COMMAND ----------
 

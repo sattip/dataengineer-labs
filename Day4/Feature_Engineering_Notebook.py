@@ -24,14 +24,16 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 1: Schema Setup
+# MAGIC ## Βήμα 1: Schema & Volume Setup
 # MAGIC
-# MAGIC Δημιουργούμε το schema `aade` αν δεν υπάρχει. Όλοι οι πίνακες θα μπουν εδώ.
+# MAGIC Δημιουργούμε schema `workspace.aade` και volume `workspace.aade.aade_data`
+# MAGIC αν δεν υπάρχουν. Όλοι οι πίνακες θα μπουν εδώ.
 
 # COMMAND ----------
 
-spark.sql("CREATE SCHEMA IF NOT EXISTS aade")
-print("✓ Schema aade έτοιμο")
+spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
+spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
+print("✓ Schema workspace.aade & Volume aade_data έτοιμα")
 
 # COMMAND ----------
 
@@ -269,13 +271,13 @@ df_feat.groupBy("is_high_income").count().show()
 # MAGIC %md
 # MAGIC ## Βήμα 12: Αποθήκευση σε Delta Table
 # MAGIC
-# MAGIC Saving features σε `aade.tax_features`. **Delta = ACID + time travel**:
+# MAGIC Saving features σε `workspace.aade.tax_features`. **Delta = ACID + time travel**:
 # MAGIC αν αύριο σπάσει κάτι, μπορούμε να γυρίσουμε σε προηγούμενη version.
 
 # COMMAND ----------
 
-df_feat.write.format("delta").mode("overwrite").saveAsTable("aade.tax_features")
-print("✓ Delta Table δημιουργήθηκε: aade.tax_features")
+df_feat.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.tax_features")
+print("✓ Delta Table δημιουργήθηκε: workspace.aade.tax_features")
 
 # COMMAND ----------
 
@@ -284,7 +286,7 @@ print("✓ Delta Table δημιουργήθηκε: aade.tax_features")
 # MAGIC SELECT afm, name, region, year, income, tax_paid,
 # MAGIC        tax_rate, is_high_income, income_change_yoy,
 # MAGIC        declaration_count, avg_income_region, expense_ratio
-# MAGIC FROM aade.tax_features
+# MAGIC FROM workspace.aade.tax_features
 # MAGIC ORDER BY afm, year
 
 # COMMAND ----------
@@ -331,7 +333,7 @@ print(f"  Αρχικές εγγραφές:     {df_raw.count()}")
 print(f"  Features δημιουργήθηκαν: {len(feature_cols)}")
 print(f"  Missing values:       imputation με median")
 print(f"  Quality checks:       4 (nulls, range, distribution, balance)")
-print(f"  Delta Table:          aade.tax_features")
+print(f"  Delta Table:          workspace.aade.tax_features")
 print()
 print("  Top-3 features (correlation με tax_paid):")
 df_corr.limit(3).show(truncate=False)
