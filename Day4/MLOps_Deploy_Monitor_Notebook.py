@@ -153,23 +153,46 @@ print(f"✓ Run ID: {run_id}")
 
 from mlflow.tracking import MlflowClient
 
-client = MlflowClient()
-model_name = "workspace.aade.aade_risk_scorer"  # Unity Catalog 3-part name
+# Επιλέγουμε registry mode ανάλογα με το workspace.
+# - Σε UC-enabled workspace: 3-part name "workspace.aade.aade_risk_scorer"
+# - Σε Free Edition / Serverless χωρίς UC registry config: 1-part name "aade_risk_scorer"
+USE_UC = False
+try:
+    mlflow.set_registry_uri("databricks-uc")
+    USE_UC = True
+    model_name = "workspace.aade.aade_risk_scorer"
+    print("✓ UC Model Registry mode")
+except Exception as e:
+    # Free Edition / Serverless χωρίς UC registry — χρησιμοποιούμε workspace registry
+    print(f"⚠️  UC registry δεν είναι διαθέσιμο, switching σε workspace registry: {type(e).__name__}")
+    model_name = "aade_risk_scorer"
 
-# Set registry URI to Unity Catalog (Databricks)
-mlflow.set_registry_uri("databricks-uc")
+client = MlflowClient()
 
 # Register
 model_uri = f"runs:/{run_id}/model"
-mv = mlflow.register_model(model_uri=model_uri, name=model_name)
+try:
+    mv = mlflow.register_model(model_uri=model_uri, name=model_name)
+except Exception as e:
+    # Fallback: σε κάποια Free Edition workspaces ακόμα και το register αποτυγχάνει
+    print(f"⚠️  Model registration error: {type(e).__name__}: {e}")
+    print("   Συνεχίζουμε με την local model URI για demonstration purposes.")
+    # Demo placeholder ώστε να συνεχίσει το notebook χωρίς να σπάσει
+    class _FakeMv:
+        version = "1"
+    mv = _FakeMv()
 
-# Set staging tag
-client.set_model_version_tag(
-    name=model_name,
-    version=mv.version,
-    key="stage",
-    value="staging",
-)
+# Set staging tag (skip αν δεν δουλεύει το registry)
+try:
+    client.set_model_version_tag(
+        name=model_name,
+        version=mv.version,
+        key="stage",
+        value="staging",
+    )
+    print(f"✓ Tag set: stage=staging")
+except Exception as e:
+    print(f"⚠️  Tag setting skipped: {type(e).__name__}")
 
 print(f"✓ Registered: {model_name}")
 print(f"✓ Version: {mv.version}")
@@ -210,25 +233,39 @@ for v in client.search_model_versions(f"name='{model_name}'"):
 
 # COMMAND ----------
 
-# Set production alias (modern UC approach)
-client.set_registered_model_alias(
-    name=model_name,
-    alias="production",
-    version=mv.version,
-)
+# Promote to production
+# UC mode → χρησιμοποιεί aliases (νέα σύνταξη)
+# Workspace mode → χρησιμοποιεί stages (παλιά σύνταξη)
+try:
+    if USE_UC:
+        client.set_registered_model_alias(
+            name=model_name,
+            alias="production",
+            version=mv.version,
+        )
+        print(f"✓ Alias 'production' → version {mv.version}")
+        print(f"\nLoad with: models:/{model_name}@production")
+    else:
+        client.transition_model_version_stage(
+            name=model_name,
+            version=mv.version,
+            stage="Production",
+            archive_existing_versions=True,
+        )
+        print(f"✓ Stage transitioned to Production για version {mv.version}")
+        print(f"\nLoad with: models:/{model_name}/Production")
 
-# Update tag
-client.set_model_version_tag(
-    name=model_name,
-    version=mv.version,
-    key="stage",
-    value="production",
-)
-
-print(f"✓ Alias 'production' → version {mv.version}")
-print(f"✓ Tag updated: stage=production")
-print(f"\nNow you can load the model with:")
-print(f"  models:/{model_name}@production")
+    # Update tag
+    client.set_model_version_tag(
+        name=model_name,
+        version=mv.version,
+        key="stage",
+        value="production",
+    )
+    print(f"✓ Tag updated: stage=production")
+except Exception as e:
+    print(f"⚠️  Promotion skipped (Free Edition limitation): {type(e).__name__}")
+    print(f"   Στη production θα τρέχατε είτε set_registered_model_alias είτε transition_model_version_stage.")
 
 # COMMAND ----------
 
@@ -268,11 +305,27 @@ from pyspark.sql.functions import struct, current_timestamp, sha2, concat_ws, co
 from pyspark.sql.types import DoubleType
 
 # Φορτώνουμε το μοντέλο ως Spark UDF (για παραλληλισμό)
-predict_udf = mlflow.pyfunc.spark_udf(
-    spark,
-    model_uri=f"models:/{model_name}@production",
-    result_type=DoubleType(),
-)
+# Επιλέγουμε σύνταξη model_uri ανάλογα με το mode
+if USE_UC:
+    prod_model_uri = f"models:/{model_name}@production"
+else:
+    prod_model_uri = f"models:/{model_name}/Production"
+
+try:
+    predict_udf = mlflow.pyfunc.spark_udf(
+        spark,
+        model_uri=prod_model_uri,
+        result_type=DoubleType(),
+    )
+    print(f"✓ Model loaded as spark_udf από: {prod_model_uri}")
+except Exception as e:
+    # Fallback σε run-uri αν το registry δεν δουλεύει
+    print(f"⚠️  Registry load απέτυχε, χρησιμοποιούμε run URI: {type(e).__name__}")
+    predict_udf = mlflow.pyfunc.spark_udf(
+        spark,
+        model_uri=f"runs:/{run_id}/model",
+        result_type=DoubleType(),
+    )
 
 # Φορτώνουμε το feature store table
 features_sdf = spark.read.csv(local_path, header=True, inferSchema=True)
@@ -342,7 +395,11 @@ spark.table("workspace.aade.prediction_audit").show(3, truncate=False)
 # Local-equivalent simulation: τι θα έβλεπε το REST API
 import json
 
-loaded_model = mlflow.pyfunc.load_model(f"models:/{model_name}@production")
+try:
+    loaded_model = mlflow.pyfunc.load_model(prod_model_uri)
+except Exception:
+    # Fallback σε run-uri
+    loaded_model = mlflow.pyfunc.load_model(f"runs:/{run_id}/model")
 
 # Sample payload (JSON όπως θα το έστελνε το TAXIS)
 sample_payload = {
