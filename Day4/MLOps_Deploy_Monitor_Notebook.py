@@ -344,6 +344,7 @@ try:
         spark,
         model_uri=prod_model_uri,
         result_type=DoubleType(),
+        env_manager="local",
     )
     print(f"✓ Model loaded as spark_udf από: {prod_model_uri}")
 except Exception as e:
@@ -354,6 +355,7 @@ except Exception as e:
         spark,
         model_uri=prod_model_uri,
         result_type=DoubleType(),
+        env_manager="local",
     )
 
 # Φορτώνουμε το feature store table
