@@ -169,10 +169,15 @@ df.show(3, truncate=False)
 # MAGIC
 # MAGIC Πριν φτιάξουμε split, πρέπει να καταλάβουμε **τι προβλέπουμε**.
 # MAGIC
-# MAGIC - **Target column** = `audit_outcome` με τιμές `passed` / `failed` / `pending`
+# MAGIC - **Target column** = `audit_outcome` με τιμές `passed` / `flagged` / `rejected`
+# MAGIC   - `passed`: η αίτηση πέρασε ομαλά τον έλεγχο
+# MAGIC   - `flagged`: σημάνθηκε για επιπλέον έλεγχο (μπορεί τελικά να εγκριθεί ή όχι)
+# MAGIC   - `rejected`: απορρίφθηκε
 # MAGIC - **Στόχος του ML μοντέλου**: τη στιγμή που έρχεται μια νέα αίτηση, να προβλέψει
 # MAGIC   το audit_outcome **πριν** ολοκληρωθεί ο έλεγχος
 # MAGIC - **Class balance**: είναι σημαντικό να δούμε αν το dataset είναι balanced ή imbalanced
+# MAGIC - **Binary target**: για το correlation analysis θα ομαδοποιήσουμε σε
+# MAGIC   `passed` (=1, OK) έναντι `flagged ή rejected` (=0, problematic)
 
 # COMMAND ----------
 
@@ -252,13 +257,20 @@ test.select(spark_min("request_timestamp"), spark_max("request_timestamp")).show
 # MAGIC
 # MAGIC ### 4α. Η λογική
 # MAGIC
-# MAGIC Υπολογίζουμε correlation κάθε numerical feature με το target (`audit_outcome`).
+# MAGIC Υπολογίζουμε correlation κάθε numerical feature με το binary target
+# MAGIC (1 = passed, 0 = flagged/rejected).
 # MAGIC
-# MAGIC > **Κανόνας ασφαλείας**: αν `|corr| > 0.95` → **ύποπτο για leakage**.
+# MAGIC ### 4β. Πρακτικά thresholds (χρησιμοποιήστε και τα τρία επίπεδα)
 # MAGIC
-# MAGIC ### 4β. Γιατί δουλεύει
+# MAGIC | `|corr|` | Ερμηνεία | Action |
+# MAGIC |---|---|---|
+# MAGIC | > 0.95 | **Σχεδόν σίγουρα leakage** — το feature είναι το target μεταμφιεσμένο | Drop |
+# MAGIC | 0.5 – 0.95 | **Ισχυρή υποψία** — ελέγξτε με domain knowledge και temporal check | Investigate |
+# MAGIC | < 0.5 | Πιθανώς legitimate | Keep (αλλά πάντα verify) |
 # MAGIC
-# MAGIC Στατιστικά είναι **σχεδόν αδύνατο** ένα legitimate feature να έχει τόσο τέλεια
+# MAGIC ### 4γ. Γιατί δουλεύει
+# MAGIC
+# MAGIC Στατιστικά είναι **σχεδόν αδύνατο** ένα legitimate feature να έχει πολύ τέλεια
 # MAGIC σχέση με το target. Όταν βλέπετε corr 0.99, υπάρχουν δύο σενάρια:
 # MAGIC
 # MAGIC 1. Το feature **είναι** το target μεταμφιεσμένο (target leakage)
@@ -274,40 +286,69 @@ test.select(spark_min("request_timestamp"), spark_max("request_timestamp")).show
 
 # COMMAND ----------
 
-# Convert audit_outcome σε numeric για correlation analysis
+# Convert audit_outcome σε binary numeric (1 = passed, 0 = flagged/rejected) για correlation
 from pyspark.sql.functions import when as F_when
 
 df_corr = df.withColumn(
     "target_numeric",
-    F_when(col("audit_outcome") == "passed", 1)
-    .when(col("audit_outcome") == "failed", 0)
+    F_when(col("audit_outcome") == "passed", 1.0)
+    .when(col("audit_outcome").isin("flagged", "rejected"), 0.0)
     .otherwise(None)
 ).filter(col("target_numeric").isNotNull())
 
-# Numerical features (συμπεριλαμβανομένων ύποπτων)
+# Cast features σε double ρητά (αποφυγή inferSchema surprises)
+# και ελέγχουμε διακύμανση πριν το correlation
 numeric_features = ["documents_submitted", "wait_time_minutes", "final_decision_amount"]
 
-print("=== Correlation με target (audit_outcome) ===\n")
+# Sanity check: δείχνουμε class balance και non-null counts
+print("=== Pre-correlation sanity check ===")
+print(f"Total rows με valid target: {df_corr.count():,}")
+df_corr.groupBy("target_numeric").count().show()
+
+print("=== Correlation με target (1=passed, 0=flagged/rejected) ===\n")
 for feat in numeric_features:
-    df_valid = df_corr.filter(col(feat).isNotNull())
-    if df_valid.count() == 0:
+    df_valid = df_corr.select(
+        col(feat).cast("double").alias(feat),
+        col("target_numeric"),
+    ).filter(col(feat).isNotNull())
+
+    n = df_valid.count()
+    if n == 0:
         print(f"  {feat:30s}: no valid values")
         continue
+
+    # Έλεγχος ότι υπάρχει διακύμανση (αλλιώς το corr είναι NaN)
+    distinct_feat = df_valid.select(feat).distinct().count()
+    if distinct_feat < 2:
+        print(f"  {feat:30s}: σταθερή τιμή (no variance) — corr undefined")
+        continue
+
     corr_value = df_valid.stat.corr(feat, "target_numeric")
-    flag = "  ⚠️ ΥΠΟΠΤΟ" if abs(corr_value) > 0.95 else ""
-    print(f"  {feat:30s}: {corr_value:+.4f}{flag}")
+    abs_c = abs(corr_value)
+    if abs_c > 0.95:
+        flag = "  ⚠️ ΣΧΕΔΟΝ ΣΙΓΟΥΡΑ LEAKAGE"
+    elif abs_c > 0.5:
+        flag = "  ⚠️ ΙΣΧΥΡΗ ΥΠΟΨΙΑ — investigate"
+    else:
+        flag = ""
+    print(f"  {feat:30s}: corr={corr_value:+.4f}  (n={n:,}){flag}")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC **🔍 Ερμηνεία αποτελεσμάτων:**
 # MAGIC
-# MAGIC - `documents_submitted` και `wait_time_minutes` έχουν **χαμηλή** correlation. Αυτά
-# MAGIC   είναι legitimate features — τα γνωρίζουμε τη στιγμή της υποβολής της αίτησης.
-# MAGIC - `final_decision_amount` έχει **εξαιρετικά υψηλή** correlation. Σχεδόν τέλεια.
-# MAGIC   Αυτό είναι κόκκινη σημαία. Στην πραγματικότητα είναι το ποσό προστίμου που
-# MAGIC   επιβλήθηκε **μετά** τον έλεγχο. Άρα δεν θα είναι διαθέσιμο τη στιγμή της πρόβλεψης.
-# MAGIC   **Πετάμε.**
+# MAGIC - `documents_submitted` και `wait_time_minutes` έχουν **σχεδόν μηδενική** correlation
+# MAGIC   (~0.00). Αυτά είναι legitimate features — τα γνωρίζουμε τη στιγμή της υποβολής της αίτησης.
+# MAGIC - `final_decision_amount` έχει **ισχυρή αρνητική** correlation (γύρω στο −0.70). Πέφτει
+# MAGIC   στη δεύτερη ζώνη ("ισχυρή υποψία") και απαιτεί διερεύνηση. Στην πραγματικότητα είναι
+# MAGIC   το ποσό προστίμου / τέλους που υπολογίζεται **μετά** τον έλεγχο. Δεν θα είναι διαθέσιμο
+# MAGIC   τη στιγμή της πρόβλεψης. **Πετάμε.**
+# MAGIC
+# MAGIC > **💡 Σημείωση:** Στην πραγματικότητα τα leakage features δεν χτυπάνε πάντα 0.99.
+# MAGIC > Συχνά κρύβονται γύρω στο 0.5–0.85, επειδή ο θόρυβος και τα null τα αραιώνουν. Γι'
+# MAGIC > αυτό **το correlation από μόνο του δεν φτάνει** — το συνδυάζουμε πάντα με temporal check
+# MAGIC > και domain knowledge (Βήμα 5).
 
 # COMMAND ----------
 
