@@ -648,20 +648,31 @@ except ImportError:
     subprocess.check_call(["pip", "install", "-q", "shap"])
     import shap
 
+import numpy as np
+
 # SHAP για ένα flagged sample
 explainer = shap.TreeExplainer(model)
 sample = X_test.head(1)
 shap_values = explainer.shap_values(sample)
 
-# Για binary classifier, παίρνουμε τα values της θετικής κλάσης
+# Normalize σε 1D array για το single sample, positive class.
+# RandomForestClassifier binary: shap_values μπορεί να είναι:
+#  - list of 2 arrays (κάθε μία shape (1, n_features)) — old API
+#  - ndarray shape (1, n_features, 2) — new API
+#  - ndarray shape (1, n_features) — single class
+arr = np.asarray(shap_values)
 if isinstance(shap_values, list):
-    shap_vals = shap_values[1][0]
+    shap_vals = np.asarray(shap_values[1])[0]  # positive class, first sample
+elif arr.ndim == 3:
+    shap_vals = arr[0, :, 1]  # first sample, positive class
+elif arr.ndim == 2:
+    shap_vals = arr[0]  # first sample
 else:
-    shap_vals = shap_values[0]
+    shap_vals = arr.flatten()
 
 # Top 3 contributing features
 contributions = sorted(
-    zip(features, shap_vals),
+    zip(features, [float(v) for v in shap_vals]),
     key=lambda x: abs(x[1]),
     reverse=True,
 )[:3]
