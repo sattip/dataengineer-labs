@@ -373,54 +373,100 @@ spark.table("workspace.aade.region_stats").show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 6β. Lineage queries
+# MAGIC ### 6β. Lineage — instant view με DESCRIBE EXTENDED & DESCRIBE HISTORY
 # MAGIC
-# MAGIC Οι παρακάτω queries δείχνουν τη σχέση μεταξύ tables. Μπορεί να χρειαστούν λίγα
-# MAGIC λεπτά για να γεμίσουν τα system tables με νέα events.
+# MAGIC > **⚠️ Σημείωση για system tables:** Τα `system.access.table_lineage` και
+# MAGIC > `system.access.audit` ενημερώνονται με **propagation delay 30-90 λεπτών** στο Databricks.
+# MAGIC > Στην Free Edition συχνά απαιτείται ξεχωριστή ενεργοποίηση από account admin.
+# MAGIC >
+# MAGIC > Άρα αν τρέξετε τα queries αμέσως μετά τη δημιουργία πίνακα, **θα βγουν άδεια**.
+# MAGIC > Δεν είναι bug — είναι by design (αποφεύγει overhead στο live workload).
+# MAGIC
+# MAGIC Για **instant** lineage δούμε 2 εναλλακτικές που δουλεύουν αμέσως.
 
 # COMMAND ----------
 
-print("=== Table lineage (upstream sources για region_stats) ===")
-spark.sql("""
-SELECT entity_type,
-       source_table_full_name,
-       target_table_full_name,
-       event_time
-FROM   system.access.table_lineage
-WHERE  target_table_full_name = 'workspace.aade.region_stats'
-ORDER BY event_time DESC
-LIMIT  10
-""").show(truncate=False)
+# Eναλλακτική 1: DESCRIBE EXTENDED — δείχνει metadata του table μαζί με τη δημιουργία του
+print("=== DESCRIBE EXTENDED workspace.aade.region_stats ===")
+spark.sql("DESCRIBE EXTENDED workspace.aade.region_stats").show(truncate=False, n=50)
+
+# COMMAND ----------
+
+# Εναλλακτική 2: DESCRIBE HISTORY — δείχνει όλες τις operations σε Delta table (instant!)
+print("=== DESCRIBE HISTORY για region_stats (instant Delta history) ===")
+spark.sql("DESCRIBE HISTORY workspace.aade.region_stats").show(truncate=False)
+
+print("\n=== DESCRIBE HISTORY για taxpayers ===")
+spark.sql("DESCRIBE HISTORY workspace.aade.taxpayers").show(truncate=False)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 6γ. Audit logs
+# MAGIC **🔍 Τι μάθαμε:**
 # MAGIC
-# MAGIC Κάθε access σε ένα table καταγράφεται στο `system.access.audit`. Παράδειγμα query:
-# MAGIC ποιος διάβασε τον πίνακα `taxpayers` τις τελευταίες ώρες.
-
-# COMMAND ----------
-
-print("=== Audit events στον πίνακα taxpayers (24h) ===")
-spark.sql("""
-SELECT user_identity.email AS user,
-       service_name,
-       action_name,
-       event_time
-FROM   system.access.audit
-WHERE  request_params.full_name_arg = 'workspace.aade.taxpayers'
-  AND  event_time >= current_timestamp() - INTERVAL 24 HOURS
-ORDER BY event_time DESC
-LIMIT  20
-""").show(truncate=False)
+# MAGIC - `DESCRIBE HISTORY` σας δίνει **πλήρη ιστορία** κάθε Delta table — INSERT, UPDATE,
+# MAGIC   DELETE, CREATE — με χρονοσήμανση και user. Όλα **instant**, χωρίς να περιμένετε
+# MAGIC   system tables να γεμίσουν.
+# MAGIC - Ο `version` column σας επιτρέπει time travel: `SELECT * FROM table VERSION AS OF 2`.
+# MAGIC - Σε production συνδυάζετε αυτό με system tables για cross-table lineage.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC > **🔍 Σημείωση:** Σε production ΑΑΔΕ, τα audit logs κρατιούνται για **7 χρόνια**
-# MAGIC > σε dedicated Log Analytics workspace. Είναι νομική απαίτηση για συμμόρφωση με
-# MAGIC > GDPR audit trails και EU AI Act άρθρο 12 (logging για high-risk συστήματα).
+# MAGIC ### 6γ. System tables (για production — με delay)
+# MAGIC
+# MAGIC Όταν τα system tables θα έχουν γεμίσει (μετά από ~1 ώρα), αυτά τα queries γίνονται
+# MAGIC χρυσά για compliance audits. Τα τρέχουμε εδώ για να δείξουμε τη σύνταξη.
+
+# COMMAND ----------
+
+# Cross-table lineage (μπορεί να βγει άδειο τις πρώτες ~60 λεπτά)
+print("=== Table lineage (από system.access.table_lineage) ===")
+print("Σημ: Αν είναι άδειο, ξανατρέξτε σε ~1 ώρα.\n")
+try:
+    spark.sql("""
+    SELECT entity_type,
+           source_table_full_name,
+           target_table_full_name,
+           event_time
+    FROM   system.access.table_lineage
+    WHERE  target_table_full_name = 'workspace.aade.region_stats'
+    ORDER BY event_time DESC
+    LIMIT  10
+    """).show(truncate=False)
+except Exception as e:
+    print(f"⚠️  System table not yet enabled or accessible: {e}")
+
+# COMMAND ----------
+
+# Audit log queries (επίσης delayed)
+print("=== Audit events για taxpayers (24h, από system.access.audit) ===")
+print("Σημ: Αν είναι άδειο, ξανατρέξτε σε ~1 ώρα.\n")
+try:
+    spark.sql("""
+    SELECT user_identity.email AS user,
+           service_name,
+           action_name,
+           event_time
+    FROM   system.access.audit
+    WHERE  request_params.full_name_arg = 'workspace.aade.taxpayers'
+      AND  event_time >= current_timestamp() - INTERVAL 24 HOURS
+    ORDER BY event_time DESC
+    LIMIT  20
+    """).show(truncate=False)
+except Exception as e:
+    print(f"⚠️  System table not yet enabled or accessible: {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC > **🔍 Σημείωση παραγωγής:**
+# MAGIC >
+# MAGIC > Σε production ΑΑΔΕ:
+# MAGIC > → System tables ενεργοποιούνται από workspace admin
+# MAGIC > → Propagation delay συνήθως 30-90 λεπτά
+# MAGIC > → Audit logs κρατιούνται για 7 χρόνια σε dedicated Log Analytics workspace
+# MAGIC > → Νομική απαίτηση για GDPR audit trails + EU AI Act άρθρο 12
 
 # COMMAND ----------
 
