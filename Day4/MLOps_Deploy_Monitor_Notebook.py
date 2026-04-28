@@ -68,6 +68,13 @@
 import os
 import urllib.request
 
+# CRITICAL: Set MLFLOW_REGISTRY_URI BEFORE any mlflow import/call.
+# Σε Spark Connect (Free Edition / Serverless), το MlflowClient() καλεί
+# spark.conf.get('spark.mlflow.modelRegistryUri') και σπάει με
+# CONFIG_NOT_AVAILABLE. Με το env var, το mlflow short-circuits και
+# δεν φτάνει ποτέ στο spark.conf call.
+os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
+
 # Unity Catalog setup (idempotent)
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
 spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
