@@ -573,17 +573,255 @@ for s in safe_features:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🪜 Βήμα 7: Καθαρό Dataset για παράδοση στον DS
+# MAGIC ## 🪜 Βήμα 7: Πώς τραβάμε συμπεράσματα από τα νόμιμα features
 # MAGIC
-# MAGIC ### 7α. Drop τα leakage features
+# MAGIC > **📝 Σημείωση:** Σε αυτό το συνθετικό dataset, ο σχεδιασμός είναι έτσι ώστε **όλος
+# MAGIC > ο διαχωρισμός passed/flagged/rejected να ζει στις leakage στήλες** που μόλις βγάλαμε.
+# MAGIC > Άρα τα νόμιμα features δείχνουν λίγο σήμα — αυτό είναι **εκπαιδευτικά σωστό** γιατί
+# MAGIC > δείχνει τι θα έβλεπε ο Data Scientist αν τα leakage features είχαν περάσει στο
+# MAGIC > μοντέλο. Σε **πραγματικό ΑΑΔΕ dataset**, το `service_type`, ο χρόνος υποβολής και
+# MAGIC > το ιστορικό πολίτη θα έδειχναν δραματικές διαφορές pass rate (συχνά 30%–95%).
+# MAGIC
+# MAGIC Ωραία, βγάλαμε τα leakage features. Τι μένει; Πέντε στήλες που τις **έχουμε
+# MAGIC τη στιγμή της υποβολής της αίτησης**:
+# MAGIC
+# MAGIC | Feature | Τι ξέρουμε |
+# MAGIC |---|---|
+# MAGIC | `request_timestamp` | Πότε υποβλήθηκε |
+# MAGIC | `service_type` | Τι είδους αίτηση είναι |
+# MAGIC | `documents_submitted` | Πόσα έγγραφα έφερε |
+# MAGIC | `wait_time_minutes` | Πόσο περίμενε |
+# MAGIC | `citizen_id` | Ποιος πολίτης |
+# MAGIC
+# MAGIC Πώς **βγαίνουν συμπεράσματα** από αυτά; Ας κάνουμε εξερεύνηση ένα-ένα.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 7α. `service_type` — το πιο ισχυρό legitimate feature
+# MAGIC
+# MAGIC Το είδος της αίτησης χωρίζει τις αιτήσεις σε «εύκολες» και «δύσκολες» κατηγορίες.
+# MAGIC Ας δούμε ποια services έχουν χαμηλό vs υψηλό fail rate.
+
+# COMMAND ----------
+
+from pyspark.sql.functions import sum as spark_sum
+
+# Δημιουργία binary "passed" indicator
+df_analysis = df.withColumn(
+    "passed_flag",
+    F_when(col("audit_outcome") == "passed", 1.0).otherwise(0.0)
+)
+
+print("=== Pass rate ανά service_type ===\n")
+service_breakdown = (
+    df_analysis.groupBy("service_type")
+    .agg(
+        count("*").alias("total"),
+        spark_sum("passed_flag").alias("passed"),
+    )
+    .withColumn("pass_rate_pct", spark_round((col("passed") / col("total")) * 100, 1))
+    .orderBy(col("pass_rate_pct").desc())
+)
+service_breakdown.show(truncate=False)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **🔍 Τι μάθαμε:**
+# MAGIC
+# MAGIC Παρατηρήστε πόσο διαφορετικά συμπεριφέρονται τα services. Κάποια έχουν 80%+ pass rate
+# MAGIC (τυποποιημένες, εύκολες αιτήσεις), άλλα έχουν χαμηλότερα ποσοστά (πολύπλοκες
+# MAGIC διαδικασίες, περισσότερες παγίδες).
+# MAGIC
+# MAGIC > **💡 Insight:** Αν χτίσετε μοντέλο, το `service_type` θα είναι από τα κορυφαία
+# MAGIC > predictors. Ένα `BUSINESS_PERMIT` και ένα `BIRTH_CERT` ξεκινούν με τελείως
+# MAGIC > διαφορετική «βάση πιθανοτήτων».
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 7β. `documents_submitted` — μήπως κρύβεται σχέση που το correlation δεν είδε;
+# MAGIC
+# MAGIC Το correlation βγήκε ~0.00, αλλά η σχέση μπορεί να είναι **μη γραμμική**.
+# MAGIC Π.χ. και **πολύ λίγα** και **πολύ πολλά** έγγραφα μπορεί να σημαίνουν πρόβλημα.
+# MAGIC Ας δούμε mean/median ανά outcome.
+
+# COMMAND ----------
+
+from pyspark.sql.functions import avg, expr
+
+print("=== documents_submitted ανά outcome ===\n")
+df.groupBy("audit_outcome").agg(
+    count("*").alias("rows"),
+    spark_round(avg("documents_submitted"), 2).alias("mean_docs"),
+    expr("percentile_approx(documents_submitted, 0.5)").alias("median_docs"),
+    spark_min("documents_submitted").alias("min_docs"),
+    spark_max("documents_submitted").alias("max_docs"),
+).show()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **🔍 Τι μάθαμε:**
+# MAGIC
+# MAGIC Αν τα means είναι σχεδόν ίδια ανά outcome, τότε το feature δεν ξεχωρίζει τις
+# MAGIC κατηγορίες — γι' αυτό η correlation βγήκε ~0. Αν παρατηρήσετε δραστική διαφορά
+# MAGIC σε κάποια κατηγορία (π.χ. `flagged` έχει mean 25 ενώ `passed` έχει mean 8), τότε
+# MAGIC υπάρχει κρυμμένη σχέση που η γραμμική correlation δεν έπιασε.
+# MAGIC
+# MAGIC > **💡 Insight:** Ακόμα και αν το correlation είναι μηδέν, αξίζει πάντα να
+# MAGIC > κάνετε **group-by analysis**. Η correlation μετράει μόνο γραμμικές σχέσεις.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 7γ. `request_timestamp` — εξάγουμε χρονικά features
+# MAGIC
+# MAGIC Το timestamp **από μόνο του** δεν λέει τίποτα. Αλλά μπορούμε να εξάγουμε χρήσιμα
+# MAGIC παράγωγα features:
+# MAGIC
+# MAGIC - **Ώρα της ημέρας** — οι νυχτερινές υποβολές είναι πιο ύποπτες;
+# MAGIC - **Ημέρα εβδομάδας** — τα Σαββατοκύριακα έχουν περισσότερα λάθη;
+# MAGIC - **Μήνας** — εποχικότητα;
+
+# COMMAND ----------
+
+from pyspark.sql.functions import hour, dayofweek, to_timestamp as F_to_ts
+
+df_temporal = df_analysis.withColumn(
+    "request_ts", F_to_ts(col("request_timestamp"))
+).withColumn(
+    "hour_of_day", hour(col("request_ts"))
+).withColumn(
+    "day_of_week", dayofweek(col("request_ts"))  # 1=Sunday, 7=Saturday
+)
+
+print("=== Pass rate ανά ώρα της ημέρας (top 5 και bottom 5) ===\n")
+hourly = (
+    df_temporal.groupBy("hour_of_day")
+    .agg(
+        count("*").alias("total"),
+        spark_sum("passed_flag").alias("passed"),
+    )
+    .withColumn("pass_rate_pct", spark_round((col("passed") / col("total")) * 100, 1))
+    .orderBy("hour_of_day")
+)
+hourly.show()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **🔍 Τι μάθαμε:**
+# MAGIC
+# MAGIC Αν δείτε διαφορά pass rate ανά ώρα (π.χ. 04:00 = 50%, 11:00 = 75%), έχετε
+# MAGIC ισχυρό σήμα. Νυχτερινές υποβολές συχνά είναι βιαστικές, με λιγότερο έλεγχο, οπότε
+# MAGIC είναι πιθανότερο να flagαριστούν.
+# MAGIC
+# MAGIC > **💡 Insight:** Από ένα μόνο `timestamp` βγαίνουν **πολλά features** (hour, day,
+# MAGIC > month, is_weekend, days_to_deadline, κ.λπ.). Αυτή είναι η ομορφιά του feature
+# MAGIC > engineering.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 7δ. `citizen_id` — ιστορικό συμπεριφοράς
+# MAGIC
+# MAGIC Το `citizen_id` **από μόνο του** είναι άχρηστο (ένας αριθμός). Αλλά μπορούμε να
+# MAGIC φτιάξουμε **historical features**:
+# MAGIC
+# MAGIC - Πόσες αιτήσεις έχει κάνει ο πολίτης ιστορικά;
+# MAGIC - Πόσες από αυτές flagαρίστηκαν;
+# MAGIC - Είναι repeat offender;
+# MAGIC
+# MAGIC ⚠️ **Προσοχή:** Αυτά τα features πρέπει να υπολογίζονται **μόνο από το ΠΑΡΕΛΘΟΝ**
+# MAGIC κάθε γραμμής, αλλιώς πέφτουμε ξανά σε temporal leakage. Στο production μοντέλο
+# MAGIC χρησιμοποιούμε Spark Window functions με `rangeBetween(unboundedPreceding, -1)`.
+
+# COMMAND ----------
+
+# Πόσοι repeat citizens υπάρχουν;
+print("=== Citizen activity distribution ===\n")
+citizen_activity = df.groupBy("citizen_id").count().withColumnRenamed("count", "total_requests")
+
+print(f"Συνολικά μοναδικοί πολίτες: {citizen_activity.count():,}")
+citizen_activity.groupBy("total_requests").count().orderBy("total_requests").show(10)
+
+# Pass rate για repeat customers vs first-timers
+print("=== Pass rate για repeat vs first-time citizens ===\n")
+df_with_activity = df_analysis.join(citizen_activity, on="citizen_id")
+df_with_activity = df_with_activity.withColumn(
+    "is_repeat",
+    F_when(col("total_requests") > 1, "repeat").otherwise("first_time")
+)
+(
+    df_with_activity.groupBy("is_repeat")
+    .agg(
+        count("*").alias("total"),
+        spark_round(avg("passed_flag") * 100, 1).alias("pass_rate_pct"),
+    )
+    .show()
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **🔍 Τι μάθαμε:**
+# MAGIC
+# MAGIC Αν οι repeat citizens έχουν διαφορετικό pass rate από τους first-timers, έχετε
+# MAGIC ένα ισχυρό σήμα. Συχνά οι repeat citizens είναι είτε «έμπειροι» (ξέρουν τι θέλει
+# MAGIC η αίτηση → υψηλό pass rate) είτε «προβληματικοί» (πιάστηκαν ξανά → χαμηλό pass rate).
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 7ε. Ο πραγματικός κανόνας — τα features δουλεύουν σε **συνδυασμό**
+# MAGIC
+# MAGIC Κανένα feature **από μόνο του** δεν προβλέπει τέλεια. Η μαγεία γίνεται όταν τα
+# MAGIC συνδυάζουμε:
+# MAGIC
+# MAGIC ```
+# MAGIC 👤 Νέος πολίτης (is_first_time=1)
+# MAGIC + 📋 BUSINESS_PERMIT (high_risk service)
+# MAGIC + ⏰ 23:55 της προθεσμίας (deadline=1)
+# MAGIC + 📄 4 έγγραφα μόνο (low documents)
+# MAGIC ──────────────────────────────────────
+# MAGIC = 🚨 Πολύ υψηλή πιθανότητα να flagαριστεί
+# MAGIC ```
+# MAGIC
+# MAGIC ### 🎯 Πώς δουλεύει το μοντέλο
+# MAGIC
+# MAGIC Το ML μοντέλο δεν χρησιμοποιεί ένα μόνο feature. **Παίρνει όλα τα legitimate
+# MAGIC features ταυτόχρονα**, βρίσκει μοτίβα στο ιστορικό (στις 10.000 παλιές αιτήσεις)
+# MAGIC και μαθαίνει:
+# MAGIC
+# MAGIC > *"Όταν βλέπω συνδυασμό X + Y + Z → η αίτηση έχει 73% πιθανότητα να flagαριστεί"*
+# MAGIC
+# MAGIC Αυτή η πιθανότητα μετά ταξινομεί τις νέες αιτήσεις:
+# MAGIC
+# MAGIC | Score | Action |
+# MAGIC |---|---|
+# MAGIC | > 80% | 🚨 Priority manual review |
+# MAGIC | 50–80% | ⚠️ Standard έλεγχος |
+# MAGIC | < 50% | ✅ Fast-track approval |
+# MAGIC
+# MAGIC Έτσι ο υπάλληλος δεν χάνει χρόνο σε εύκολες περιπτώσεις και επικεντρώνεται εκεί
+# MAGIC που πραγματικά αξίζει.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 8: Καθαρό Dataset για παράδοση στον DS
+# MAGIC
+# MAGIC ### 8α. Drop τα leakage features
 # MAGIC
 # MAGIC Αφαιρούμε τις τρεις προβληματικές στήλες και κρατάμε μόνο legitimate features.
 # MAGIC
-# MAGIC ### 7β. Temporal split στο καθαρό dataset
+# MAGIC ### 8β. Temporal split στο καθαρό dataset
 # MAGIC
 # MAGIC Ξανακάνουμε temporal split — αυτή τη φορά πάνω στο **καθαρό** dataset.
 # MAGIC
-# MAGIC ### 7γ. Persist σε Delta tables
+# MAGIC ### 8γ. Persist σε Delta tables
 # MAGIC
 # MAGIC Σώζουμε ως **Delta tables** στο Unity Catalog, ώστε ο Data Scientist να μπορεί
 # MAGIC να τα φορτώσει με ένα απλό `spark.table("workspace.aade.kep_train_clean")`.
