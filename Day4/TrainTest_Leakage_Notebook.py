@@ -1,33 +1,81 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Πρακτική Άσκηση — Train/Test Split & Data Leakage Detection
-# MAGIC **Ρόλος: Μηχανικοί Δεδομένων**
+# MAGIC # 🛠️ Πρακτική Άσκηση — Train/Test Split & Data Leakage Detection
 # MAGIC
-# MAGIC ## 🔗 Source URL
-# MAGIC > ```
-# MAGIC > https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/TrainTest_Leakage_Notebook.py
-# MAGIC > ```
-# MAGIC
-# MAGIC **Σενάριο**: σας δίνεται ιστορικό αιτήσεων ΚΕΠ (10K rows, 12 μήνες). Πρέπει να
-# MAGIC ετοιμάσετε **σωστό train/test split χωρίς leakage** και να εντοπίσετε ποια
-# MAGIC features περιέχουν *future information* πριν παραδώσετε το dataset στον DS.
-# MAGIC
-# MAGIC **Τι θα μάθετε:**
-# MAGIC - Quick profiling (row count, schema, date range)
-# MAGIC - **Temporal split** (όχι random!) για time-series ML
-# MAGIC - **Correlation analysis**: ποια features έχουν ύποπτα υψηλή συσχέτιση με target
-# MAGIC - Function `check_temporal_leakage()` που εντοπίζει features με future timestamps
-# MAGIC - **Leakage report**: features προς αφαίρεση + αιτιολογία
-# MAGIC
+# MAGIC **Ρόλος:** Μηχανικός Δεδομένων (Data Engineer) στην ΑΑΔΕ
 # MAGIC **Διάρκεια:** ~25'
-# MAGIC **Περιβάλλον:** Databricks Free Edition (Serverless)
+# MAGIC **Περιβάλλον:** Databricks Free Edition (Serverless) με Unity Catalog
+# MAGIC
+# MAGIC ---
+# MAGIC
+# MAGIC ## 🎯 Στόχος της άσκησης
+# MAGIC
+# MAGIC Σε αυτή την άσκηση **μπαίνετε στον ρόλο του Data Engineer** που ετοιμάζει ένα dataset
+# MAGIC για να το παραδώσει στον Data Scientist της ομάδας. Ο **βασικός σας στόχος** είναι ένας
+# MAGIC και πολύ συγκεκριμένος:
+# MAGIC
+# MAGIC > **Να εντοπίσετε και να αφαιρέσετε όλα τα features που "βλέπουν το μέλλον" (data leakage),
+# MAGIC > και να φτιάξετε ένα σωστό temporal train/test split — ώστε το μοντέλο που θα εκπαιδευτεί
+# MAGIC > να δουλεύει σωστά και στην παραγωγή, όχι μόνο στο laptop του Data Scientist.**
+# MAGIC
+# MAGIC ## 🧭 Πραγματικό σενάριο
+# MAGIC
+# MAGIC Σας δίνεται **ιστορικό αιτήσεων ΚΕΠ** (`kep_requests.csv`, **10.000 αιτήσεις, 12 μήνες**
+# MAGIC δεδομένων). Η ομάδα Data Science θέλει να φτιάξει μοντέλο που, **τη στιγμή που έρχεται μια
+# MAGIC νέα αίτηση**, να προβλέπει αν θα περάσει τον έλεγχο ή όχι (`audit_outcome`).
+# MAGIC
+# MAGIC Το πρόβλημα είναι ότι το dataset έχει **κρυμμένες παγίδες**: στήλες που γέμισαν *μετά*
+# MAGIC από τον έλεγχο. Αν αυτές μπουν στο μοντέλο, στο test θα δείτε εντυπωσιακή ακρίβεια — και
+# MAGIC στο production θα γκρεμιστεί. **Δουλειά σας:** να μην αφήσετε αυτό να συμβεί.
+# MAGIC
+# MAGIC ## ❓ Γιατί έχει σημασία (το πιο σημαντικό slide της ημέρας)
+# MAGIC
+# MAGIC Το **data leakage είναι ο νούμερο ένα δολοφόνος** των ML μοντέλων στην παραγωγή.
+# MAGIC Συμβαίνει σχεδόν σε όλους όσους ξεκινούν με ML, και δυστυχώς το παρατηρεί κανείς πολύ
+# MAGIC αργά — όταν η Διοίκηση ρωτάει «μα γιατί δεν δουλεύει το μοντέλο που μας δείξατε στο pilot;».
+# MAGIC Σε δημόσιο φορέα όπως η ΑΑΔΕ, αυτό μπορεί να σημαίνει:
+# MAGIC
+# MAGIC - Άδικους ελέγχους σε φορολογούμενους (false positives)
+# MAGIC - Χαμένα πραγματικά κρούσματα (false negatives)
+# MAGIC - Νομικές προσφυγές που δεν μπορείτε να υπερασπιστείτε
+# MAGIC - Πτώση εμπιστοσύνης στην ίδια την έννοια του AI στο Δημόσιο
+# MAGIC
+# MAGIC ## 📋 Τα 5 βήματα της άσκησης
+# MAGIC
+# MAGIC | # | Βήμα | Τι κάνουμε |
+# MAGIC |---|---|---|
+# MAGIC | 1 | **Profiling** | Φορτώνουμε το dataset σε PySpark DataFrame και κάνουμε quick profiling: row count, schema, date range. *Μάντεψε σωστά πριν επιλύσεις.* |
+# MAGIC | 2 | **Temporal Split** | Training = αιτήσεις πριν την 2024-01-01, test = μετά. **ΠΟΤΕ random split** σε time-series ML. |
+# MAGIC | 3 | **Correlation Analysis** | Υπολογίζουμε correlation κάθε feature με το target (`audit_outcome`). Όποιο έχει `\|corr\| > 0.95` → **ύποπτο για leakage**. |
+# MAGIC | 4 | **`check_temporal_leakage()`** | Γράφουμε function που επιστρέφει features όπου `max(feature_timestamp) > target_timestamp`. |
+# MAGIC | 5 | **Leakage Report** | Παράγουμε αναφορά: features προς αφαίρεση + αιτιολογία. Φτιάχνουμε καθαρά Delta tables για παράδοση στον DS. |
+# MAGIC
+# MAGIC > **💡 Tip από το slide:** Τα κλασικά leakage patterns που θα συναντήσετε είναι
+# MAGIC > `final_decision`, `fine_amount`, `audit_completion_date`, `closure_reason`. Αν εμφανίζονται
+# MAGIC > στο training set, **το μοντέλο "βλέπει το μέλλον"**.
+# MAGIC
+# MAGIC ## 📦 Παραδοτέα στο τέλος
+# MAGIC
+# MAGIC - **Volume**: `/Volumes/workspace/aade/aade_data/kep_requests.csv` (το raw dataset)
+# MAGIC - **Delta Table**: `workspace.aade.kep_train_clean` (training set, χωρίς leakage)
+# MAGIC - **Delta Table**: `workspace.aade.kep_test_clean` (test set, χωρίς leakage)
+# MAGIC - **Leakage Report** (printed στο notebook output)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 1: Download Dataset & Quick Profiling
+# MAGIC ## 🪜 Βήμα 0: Setup — Unity Catalog Volume
 # MAGIC
-# MAGIC Κατεβάζουμε το `kep_requests.csv` (10.000 αιτήσεις από ΚΕΠ, 12 μήνες δεδομένων).
+# MAGIC Πριν κατεβάσουμε το dataset, χρειαζόμαστε ένα **Unity Catalog Volume** για να το
+# MAGIC αποθηκεύσουμε. Στο Databricks το Volume είναι το προτεινόμενο σημείο για αρχεία
+# MAGIC (αντί για το παλιό `/tmp` ή `/dbfs`), γιατί:
+# MAGIC
+# MAGIC - **Persists** ανάμεσα σε cluster restarts
+# MAGIC - **Audit-loggable** μέσω Unity Catalog (ποιος διάβασε τι, πότε)
+# MAGIC - **Permission-controlled** με GRANT statements
+# MAGIC - **Καθαρό path** (`/Volumes/<catalog>/<schema>/<volume>/...`)
+# MAGIC
+# MAGIC Οι παρακάτω εντολές είναι **idempotent** — αν τα objects υπάρχουν ήδη, δεν σπάνε.
 
 # COMMAND ----------
 
@@ -42,10 +90,43 @@ spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
 volume_dir = "/Volumes/workspace/aade/aade_data"
 os.makedirs(volume_dir, exist_ok=True)
 
+print(f"✓ Schema:  workspace.aade")
+print(f"✓ Volume:  workspace.aade.aade_data")
+print(f"✓ Path:    {volume_dir}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 1: Download Dataset & Quick Profiling
+# MAGIC
+# MAGIC ### 1α. Κατεβάζουμε το CSV στο Volume
+# MAGIC
+# MAGIC Κατεβάζουμε το `kep_requests.csv` (10.000 αιτήσεις από ΚΕΠ, 12 μήνες δεδομένων)
+# MAGIC απευθείας από το GitHub στο Unity Catalog Volume.
+
+# COMMAND ----------
+
 url = "https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/kep_requests.csv"
 local = f"{volume_dir}/kep_requests.csv"
 urllib.request.urlretrieve(url, local)
 print(f"✓ Downloaded to Volume: {local}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 1β. Φόρτωση σε PySpark DataFrame & Profiling
+# MAGIC
+# MAGIC **Πριν αγγίξουμε οτιδήποτε άλλο**, κάνουμε *quick profiling*. Αυτό είναι ο
+# MAGIC πιο σημαντικός κανόνας του Data Engineering, και είναι αυτός που χωρίζει τους
+# MAGIC junior από τους senior:
+# MAGIC
+# MAGIC > **Πάντα profiling πριν αναλύσεις. Μάθε με τι δουλεύεις πριν αρχίσεις να αποφασίζεις.**
+# MAGIC
+# MAGIC Τι κοιτάμε:
+# MAGIC - **Row count**: είναι όσες περιμέναμε; (10.000)
+# MAGIC - **Schema**: τι στήλες έχουμε, τι τύπους; Υπάρχει κάτι περίεργο;
+# MAGIC - **Date range**: ποια περίοδο καλύπτει; (αυτό θα μας οδηγήσει στο cutoff date στο Βήμα 2)
+# MAGIC - **Sample rows**: τι μοιάζουν τα δεδομένα στην πραγματικότητα;
 
 # COMMAND ----------
 
@@ -72,10 +153,26 @@ df.show(3, truncate=False)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 2: Target & Initial Look
+# MAGIC **🔍 Παρατηρήσεις από το profiling:**
 # MAGIC
-# MAGIC **Target** = `audit_outcome` (passed / failed / pending).
-# MAGIC Σκοπός μοντέλου: predict το audit_outcome **πριν** ολοκληρωθεί ο έλεγχος.
+# MAGIC - Έχουμε **10.000 αιτήσεις** σε 12 μήνες δεδομένα (από Ιαν 2023 έως Δεκ 2024)
+# MAGIC - Υπάρχουν δύο timestamp στήλες: `request_timestamp` (πότε ήρθε η αίτηση) και
+# MAGIC   `audit_completion_date` (πότε ολοκληρώθηκε ο έλεγχος). Σημειώστε αυτή τη διαφορά
+# MAGIC   — θα γίνει κρίσιμη στο Βήμα 5.
+# MAGIC - Υπάρχουν στήλες όπως `final_decision_amount` και `closure_reason` που "**μυρίζουν**"
+# MAGIC   ύποπτες από τώρα. Θα τις εξετάσουμε με προσοχή παρακάτω.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 2: Target & Initial Look
+# MAGIC
+# MAGIC Πριν φτιάξουμε split, πρέπει να καταλάβουμε **τι προβλέπουμε**.
+# MAGIC
+# MAGIC - **Target column** = `audit_outcome` με τιμές `passed` / `failed` / `pending`
+# MAGIC - **Στόχος του ML μοντέλου**: τη στιγμή που έρχεται μια νέα αίτηση, να προβλέψει
+# MAGIC   το audit_outcome **πριν** ολοκληρωθεί ο έλεγχος
+# MAGIC - **Class balance**: είναι σημαντικό να δούμε αν το dataset είναι balanced ή imbalanced
 
 # COMMAND ----------
 
@@ -88,15 +185,42 @@ df.groupBy("service_type").count().orderBy(col("count").desc()).show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 3: Temporal Split (ΟΧΙ Random!)
+# MAGIC **🔍 Τι μάθαμε:**
 # MAGIC
-# MAGIC **Κανόνας**: σε time-series ML, **ΠΟΤΕ random split**. Ο λόγος:
-# MAGIC με random split το μοντέλο «βλέπει» δεδομένα του μέλλοντος στο training,
-# MAGIC κάτι που δεν θα συμβαίνει σε production.
+# MAGIC - Έχουμε τρεις κλάσεις: `passed`, `failed`, `pending`. Οι `pending` αιτήσεις δεν
+# MAGIC   έχουν ολοκληρωμένο έλεγχο ακόμα — θα τις χειριστούμε ξεχωριστά (πιθανώς θα τις
+# MAGIC   πετάξουμε από το training set).
+# MAGIC - Οι **service types** μας λένε τι είδους αιτήσεις έχουμε (διαβατήρια, πιστοποιητικά,
+# MAGIC   κ.λπ.) — αυτό μπορεί να γίνει χρήσιμο feature αργότερα.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 3: Temporal Split (ΟΧΙ Random!)
 # MAGIC
-# MAGIC **Σωστή προσέγγιση**: cutoff date.
-# MAGIC - **Training**: αιτήσεις ΠΡΙΝ 2024-01-01
-# MAGIC - **Test**: αιτήσεις ΑΠΟ 2024-01-01
+# MAGIC ### 3α. Ο χρυσός κανόνας
+# MAGIC
+# MAGIC > **Σε time-series ML, ΠΟΤΕ random split. Πάντα temporal split.**
+# MAGIC
+# MAGIC ### 3β. Γιατί;
+# MAGIC
+# MAGIC Φανταστείτε ότι κάνετε random 80/20 split. Το μοντέλο εκπαιδεύεται σε δεδομένα
+# MAGIC από όλο το έτος — και μετά το τεστάρετε σε άλλα δεδομένα από το **ίδιο έτος**.
+# MAGIC Δηλαδή το μοντέλο "βλέπει" δεδομένα του Δεκεμβρίου ενώ προβλέπει για τον Μάιο.
+# MAGIC Αυτό **δεν συμβαίνει στην παραγωγή** — εκεί το μοντέλο πάντα προβλέπει το μέλλον,
+# MAGIC χωρίς να ξέρει τι θα γίνει.
+# MAGIC
+# MAGIC Το αποτέλεσμα: στο test βλέπετε 95% accuracy, στο production 60%. Ο Data Scientist
+# MAGIC σας θα κατηγορηθεί άδικα.
+# MAGIC
+# MAGIC ### 3γ. Σωστή προσέγγιση: cutoff date
+# MAGIC
+# MAGIC Διαλέγουμε μια ημερομηνία (π.χ. **2024-01-01**) και:
+# MAGIC - **Training**: ότι ήρθε ΠΡΙΝ από αυτή την ημερομηνία
+# MAGIC - **Test**: ότι ήρθε ΑΠΟ αυτή την ημερομηνία και μετά
+# MAGIC
+# MAGIC Έτσι μιμούμαστε ακριβώς αυτό που γίνεται στην παραγωγή: το μοντέλο μαθαίνει από
+# MAGIC το παρελθόν και προβλέπει το μέλλον.
 
 # COMMAND ----------
 
@@ -115,15 +239,38 @@ test.select(spark_min("request_timestamp"), spark_max("request_timestamp")).show
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 4: Correlation Analysis — Detection #1
+# MAGIC **🔍 Παρατηρήστε:**
 # MAGIC
-# MAGIC Υπολογίζουμε correlation κάθε numerical feature με το target.
+# MAGIC - Το train set έχει αιτήσεις **μόνο** από Ιαν–Δεκ 2023
+# MAGIC - Το test set έχει αιτήσεις **μόνο** από Ιαν 2024 και μετά
+# MAGIC - **Καμία επικάλυψη** στο χρόνο. Όπως ακριβώς θα είναι στην παραγωγή.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 4: Correlation Analysis — Detection Mechanism #1
 # MAGIC
-# MAGIC **Κανόνας**: αν \|corr\| > 0.95 → **ύποπτο για leakage**.
+# MAGIC ### 4α. Η λογική
 # MAGIC
-# MAGIC Λογική: στατιστικά είναι σχεδόν αδύνατο ένα legitimate feature να έχει
-# MAGIC τόσο τέλεια σχέση με το target. Συνήθως σημαίνει ότι το feature **είναι** το
-# MAGIC target ή derives από αυτό.
+# MAGIC Υπολογίζουμε correlation κάθε numerical feature με το target (`audit_outcome`).
+# MAGIC
+# MAGIC > **Κανόνας ασφαλείας**: αν `|corr| > 0.95` → **ύποπτο για leakage**.
+# MAGIC
+# MAGIC ### 4β. Γιατί δουλεύει
+# MAGIC
+# MAGIC Στατιστικά είναι **σχεδόν αδύνατο** ένα legitimate feature να έχει τόσο τέλεια
+# MAGIC σχέση με το target. Όταν βλέπετε corr 0.99, υπάρχουν δύο σενάρια:
+# MAGIC
+# MAGIC 1. Το feature **είναι** το target μεταμφιεσμένο (target leakage)
+# MAGIC 2. Το feature **derives από το target** (π.χ. υπολογίστηκε *μετά* τον έλεγχο)
+# MAGIC
+# MAGIC Και τα δύο είναι κακά. Σε production, αυτό το feature **δεν θα υπάρχει**.
+# MAGIC
+# MAGIC ### 4γ. Σημαντικό caveat
+# MAGIC
+# MAGIC Η correlation ανίχνευση πιάνει μόνο **numerical** leakage. Δεν θα πιάσει string
+# MAGIC features όπως το `closure_reason` (που είναι κι αυτό leakage). Γι' αυτό χρειάζεται
+# MAGIC και το temporal check στο Βήμα 5.
 
 # COMMAND ----------
 
@@ -153,20 +300,44 @@ for feat in numeric_features:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 5: Temporal Leakage Check — Detection #2
+# MAGIC **🔍 Ερμηνεία αποτελεσμάτων:**
 # MAGIC
-# MAGIC Λειτουργία `check_temporal_leakage(df)` που επιστρέφει features όπου:
+# MAGIC - `documents_submitted` και `wait_time_minutes` έχουν **χαμηλή** correlation. Αυτά
+# MAGIC   είναι legitimate features — τα γνωρίζουμε τη στιγμή της υποβολής της αίτησης.
+# MAGIC - `final_decision_amount` έχει **εξαιρετικά υψηλή** correlation. Σχεδόν τέλεια.
+# MAGIC   Αυτό είναι κόκκινη σημαία. Στην πραγματικότητα είναι το ποσό προστίμου που
+# MAGIC   επιβλήθηκε **μετά** τον έλεγχο. Άρα δεν θα είναι διαθέσιμο τη στιγμή της πρόβλεψης.
+# MAGIC   **Πετάμε.**
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 5: Temporal Leakage Check — Detection Mechanism #2
 # MAGIC
-# MAGIC `max(feature_timestamp) > target_timestamp`
+# MAGIC ### 5α. Η λογική
 # MAGIC
-# MAGIC Δηλαδή features που είναι «**στο μέλλον**» σε σχέση με το event που προβλέπουμε.
+# MAGIC Γράφουμε function `check_temporal_leakage(df)` που επιστρέφει features όπου:
 # MAGIC
-# MAGIC Στην περίπτωσή μας:
-# MAGIC - **Event time**: `request_timestamp` (πότε υποβλήθηκε η αίτηση)
+# MAGIC ```
+# MAGIC max(feature_timestamp) > target_timestamp
+# MAGIC ```
+# MAGIC
+# MAGIC Δηλαδή features που έχουν τιμές **"στο μέλλον"** σε σχέση με το event που προβλέπουμε.
+# MAGIC
+# MAGIC ### 5β. Στην περίπτωσή μας
+# MAGIC
+# MAGIC - **Event time**: `request_timestamp` (πότε υποβλήθηκε η αίτηση — η στιγμή της πρόβλεψης)
 # MAGIC - **Suspicious feature time**: `audit_completion_date` (πότε ολοκληρώθηκε ο έλεγχος)
 # MAGIC
-# MAGIC Φυσικά το `audit_completion_date` είναι **πάντα μετά** το `request_timestamp` →
-# MAGIC είναι **temporal leakage**.
+# MAGIC Φυσικά το `audit_completion_date` είναι **πάντα μετά** το `request_timestamp` —
+# MAGIC δεν γίνεται να ολοκληρωθεί ο έλεγχος πριν υποβληθεί η αίτηση. Άρα:
+# MAGIC
+# MAGIC > **`audit_completion_date` είναι temporal leakage και πρέπει να φύγει.**
+# MAGIC
+# MAGIC ### 5γ. Γιατί η function είναι reusable
+# MAGIC
+# MAGIC Σε πραγματικά project θα έχετε **δεκάδες** timestamp columns. Η function τις
+# MAGIC ελέγχει όλες αυτόματα και επιστρέφει αναφορά. Αντί να το κάνετε χειροκίνητα.
 
 # COMMAND ----------
 
@@ -176,6 +347,13 @@ def check_temporal_leakage(df, event_time_col, candidate_time_cols):
     """
     Επιστρέφει features όπου max(feature_timestamp) > event_timestamp.
     Αυτά είναι temporal leakage candidates.
+
+    Args:
+        df: PySpark DataFrame
+        event_time_col: Η στήλη που περιέχει το event timestamp (π.χ. "request_timestamp")
+        candidate_time_cols: Λίστα με στήλες προς έλεγχο
+    Returns:
+        Λίστα από dicts με {feature, rows_in_future, pct_in_future}
     """
     leakage_features = []
     for c in candidate_time_cols:
@@ -212,17 +390,32 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 6: Leakage Report
+# MAGIC **🔍 Αποτέλεσμα:**
 # MAGIC
-# MAGIC Τελικό report με features προς **αφαίρεση** + αιτιολογία.
+# MAGIC Όπως ήταν αναμενόμενο, **το 100% των γραμμών** του `audit_completion_date` είναι στο
+# MAGIC μέλλον σε σχέση με το `request_timestamp`. Αυτό αποδεικνύει ότι είναι temporal leakage
+# MAGIC και πρέπει να αφαιρεθεί.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🪜 Βήμα 6: Leakage Report
 # MAGIC
-# MAGIC **Κλασικά leakage patterns** (από το slide):
+# MAGIC ### 6α. Σύνοψη ευρημάτων
+# MAGIC
+# MAGIC Συγκεντρώνουμε όλα τα ευρήματά μας σε ένα δομημένο **report** που μπορούμε να
+# MAGIC παραδώσουμε στον Data Scientist και στη Διοίκηση.
+# MAGIC
+# MAGIC ### 6β. Κλασικά leakage patterns
+# MAGIC
+# MAGIC Από το slide:
 # MAGIC - `final_decision_amount` (= final_decision)
 # MAGIC - `audit_completion_date`
 # MAGIC - `closure_reason`
 # MAGIC - οποιοδήποτε `audit_*` field
 # MAGIC
-# MAGIC Αν εμφανίζονται στο training, **το μοντέλο "βλέπει το μέλλον"**.
+# MAGIC Αν εμφανίζονται στο training, **το μοντέλο "βλέπει το μέλλον"**. Σε production
+# MAGIC αυτές οι στήλες δεν θα υπάρχουν τη στιγμή της πρόβλεψης.
 
 # COMMAND ----------
 
@@ -270,10 +463,26 @@ for s in safe_features:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 7: Καθαρό Dataset για παράδοση στον DS
+# MAGIC ## 🪜 Βήμα 7: Καθαρό Dataset για παράδοση στον DS
 # MAGIC
-# MAGIC Φτιάχνουμε **clean version** χωρίς τις leakage features και κάνουμε
-# MAGIC **temporal split** για να την παραδώσουμε στον Data Scientist.
+# MAGIC ### 7α. Drop τα leakage features
+# MAGIC
+# MAGIC Αφαιρούμε τις τρεις προβληματικές στήλες και κρατάμε μόνο legitimate features.
+# MAGIC
+# MAGIC ### 7β. Temporal split στο καθαρό dataset
+# MAGIC
+# MAGIC Ξανακάνουμε temporal split — αυτή τη φορά πάνω στο **καθαρό** dataset.
+# MAGIC
+# MAGIC ### 7γ. Persist σε Delta tables
+# MAGIC
+# MAGIC Σώζουμε ως **Delta tables** στο Unity Catalog, ώστε ο Data Scientist να μπορεί
+# MAGIC να τα φορτώσει με ένα απλό `spark.table("workspace.aade.kep_train_clean")`.
+# MAGIC
+# MAGIC **Γιατί Delta και όχι Parquet:**
+# MAGIC - ACID transactions (concurrent writes)
+# MAGIC - Time travel (γυρίζετε σε προηγούμενες versions)
+# MAGIC - Schema enforcement
+# MAGIC - Performance optimizations (Z-Ordering, OPTIMIZE)
 
 # COMMAND ----------
 
@@ -296,27 +505,40 @@ train_clean.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.
 test_clean.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.kep_test_clean")
 
 print("\n✓ Dataset έτοιμο για ML training (χωρίς leakage)")
+print(f"  → workspace.aade.kep_train_clean")
+print(f"  → workspace.aade.kep_test_clean")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## ✅ Ολοκλήρωση
 # MAGIC
-# MAGIC ### Τι μάθατε:
-# MAGIC 1. **Quick profiling** πριν κάνετε οτιδήποτε άλλο (row count, schema, date range)
-# MAGIC 2. **Temporal split** (όχι random) για time-series ML
-# MAGIC 3. **Correlation analysis**: |corr| > 0.95 = ύποπτο για leakage
-# MAGIC 4. **`check_temporal_leakage()`**: εντοπισμός features με future timestamps
-# MAGIC 5. **Leakage report** με features προς αφαίρεση + αιτιολογία
+# MAGIC ### 🎓 Τι μάθατε σε αυτή την άσκηση
 # MAGIC
-# MAGIC ### Τα 3 leakage features που εντοπίσαμε:
+# MAGIC 1. **Quick profiling** πριν κάνετε οτιδήποτε άλλο (row count, schema, date range)
+# MAGIC 2. **Temporal split** (όχι random) για time-series ML — γιατί random split μιμείται την παραγωγή λάθος
+# MAGIC 3. **Correlation analysis** ως πρώτη γραμμή άμυνας: `|corr| > 0.95` = ύποπτο για leakage
+# MAGIC 4. **Function `check_temporal_leakage()`** για systematic εντοπισμό features με future timestamps
+# MAGIC 5. **Leakage report** με features προς αφαίρεση + αιτιολογία (ώστε να είστε in line με EU AI Act audit trail)
+# MAGIC 6. **Persist σε Delta tables** στο Unity Catalog για παράδοση στον DS
+# MAGIC
+# MAGIC ### 📊 Τα 3 leakage features που εντοπίσαμε
+# MAGIC
 # MAGIC | Feature | Type | Γιατί |
 # MAGIC |---|---|---|
 # MAGIC | `audit_completion_date` | Temporal | Timestamp μετά το event |
 # MAGIC | `final_decision_amount` | Target | Παράγεται μετά τον έλεγχο |
 # MAGIC | `closure_reason` | Temporal + Target | Future info |
 # MAGIC
-# MAGIC ### Bridge:
+# MAGIC ### 🚀 Επόμενα βήματα
+# MAGIC
 # MAGIC Με αυτό το καθαρό dataset, ο **Data Scientist** μπορεί να εκπαιδεύσει μοντέλο
-# MAGIC που δεν θα «τσιμπήσει» από data leakage. Επόμενο βήμα: feature engineering +
-# MAGIC training (βλ. `Feature_Engineering_Notebook.py` και `ML_Model_Notebook.py`).
+# MAGIC που δεν θα «τσιμπήσει» από data leakage. Επόμενα στάδια στη ροή:
+# MAGIC
+# MAGIC - **Lab 3** (`Feature_Engineering_Notebook.py`): φτιάχνουμε features από raw data
+# MAGIC - **Lab 4** (`ML_Model_Notebook.py`): training Random Forest με sklearn + MLflow tracking
+# MAGIC
+# MAGIC ### 💡 Take-home message
+# MAGIC
+# MAGIC > **Το data leakage δεν φαίνεται με γυμνό μάτι. Φαίνεται μόνο όταν το ψάξεις.
+# MAGIC > Σε δημόσιο φορέα όπως η ΑΑΔΕ, αυτό το βήμα δεν είναι nice-to-have — είναι το νόμιμο και ηθικό σας καθήκον.**
