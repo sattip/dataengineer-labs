@@ -154,45 +154,62 @@ print(f"✓ Run ID: {run_id}")
 from mlflow.tracking import MlflowClient
 
 # Επιλέγουμε registry mode ανάλογα με το workspace.
-# - Σε UC-enabled workspace: 3-part name "workspace.aade.aade_risk_scorer"
-# - Σε Free Edition / Serverless χωρίς UC registry config: 1-part name "aade_risk_scorer"
+# Auto-detect: αν τρέχουμε σε Spark Connect (Free Edition / Serverless) και
+# το spark.mlflow.modelRegistryUri δεν είναι διαθέσιμο, dropάρουμε σε
+# in-run mode και δείχνουμε τη ροή αλλιώς.
+USE_REGISTRY = True
 USE_UC = False
+model_name = "aade_risk_scorer"  # default 1-part name για workspace registry
+
+# Test αν το registry config είναι διαθέσιμο πριν προσπαθήσουμε register
 try:
-    mlflow.set_registry_uri("databricks-uc")
+    _test = spark.conf.get("spark.mlflow.modelRegistryUri")
     USE_UC = True
     model_name = "workspace.aade.aade_risk_scorer"
-    print("✓ UC Model Registry mode")
+    print("✓ UC Model Registry mode — modelRegistryUri available")
 except Exception as e:
-    # Free Edition / Serverless χωρίς UC registry — χρησιμοποιούμε workspace registry
-    print(f"⚠️  UC registry δεν είναι διαθέσιμο, switching σε workspace registry: {type(e).__name__}")
-    model_name = "aade_risk_scorer"
+    err_str = str(e)
+    if "CONFIG_NOT_AVAILABLE" in err_str or "modelRegistryUri" in err_str:
+        # Free Edition / Serverless: ούτε UC ούτε workspace registry
+        USE_REGISTRY = False
+        print("⚠️  Model Registry δεν είναι διαθέσιμο σε αυτό το workspace (Free Edition)")
+        print("   Συνεχίζουμε σε in-run mode — το μοντέλο φορτώνεται από runs:/run_id/model")
+    else:
+        # Κάποιο άλλο error — δοκιμάζουμε workspace registry
+        print(f"⚠️  Spark Connect issue, switching σε workspace registry: {type(e).__name__}")
 
 client = MlflowClient()
 
-# Register
-model_uri = f"runs:/{run_id}/model"
-try:
-    mv = mlflow.register_model(model_uri=model_uri, name=model_name)
-except Exception as e:
-    # Fallback: σε κάποια Free Edition workspaces ακόμα και το register αποτυγχάνει
-    print(f"⚠️  Model registration error: {type(e).__name__}: {e}")
-    print("   Συνεχίζουμε με την local model URI για demonstration purposes.")
-    # Demo placeholder ώστε να συνεχίσει το notebook χωρίς να σπάσει
+# Register (ή skip αν registry not available)
+mv = None
+if USE_REGISTRY:
+    model_uri = f"runs:/{run_id}/model"
+    try:
+        mv = mlflow.register_model(model_uri=model_uri, name=model_name)
+        print(f"✓ Registered: {model_name} version {mv.version}")
+    except Exception as e:
+        USE_REGISTRY = False
+        print(f"⚠️  Model registration failed: {type(e).__name__}")
+        print("   Switching σε in-run mode")
+
+# Demo placeholder version όταν registry δεν δουλεύει
+if mv is None:
     class _FakeMv:
         version = "1"
     mv = _FakeMv()
 
-# Set staging tag (skip αν δεν δουλεύει το registry)
-try:
-    client.set_model_version_tag(
-        name=model_name,
-        version=mv.version,
-        key="stage",
-        value="staging",
-    )
-    print(f"✓ Tag set: stage=staging")
-except Exception as e:
-    print(f"⚠️  Tag setting skipped: {type(e).__name__}")
+# Set staging tag μόνο αν έχουμε registry
+if USE_REGISTRY:
+    try:
+        client.set_model_version_tag(
+            name=model_name,
+            version=mv.version,
+            key="stage",
+            value="staging",
+        )
+        print(f"✓ Tag set: stage=staging")
+    except Exception as e:
+        print(f"⚠️  Tag setting skipped: {type(e).__name__}")
 
 print(f"✓ Registered: {model_name}")
 print(f"✓ Version: {mv.version}")
@@ -234,38 +251,36 @@ for v in client.search_model_versions(f"name='{model_name}'"):
 # COMMAND ----------
 
 # Promote to production
-# UC mode → χρησιμοποιεί aliases (νέα σύνταξη)
-# Workspace mode → χρησιμοποιεί stages (παλιά σύνταξη)
-try:
-    if USE_UC:
-        client.set_registered_model_alias(
-            name=model_name,
-            alias="production",
-            version=mv.version,
-        )
-        print(f"✓ Alias 'production' → version {mv.version}")
-        print(f"\nLoad with: models:/{model_name}@production")
-    else:
-        client.transition_model_version_stage(
-            name=model_name,
-            version=mv.version,
-            stage="Production",
-            archive_existing_versions=True,
-        )
-        print(f"✓ Stage transitioned to Production για version {mv.version}")
-        print(f"\nLoad with: models:/{model_name}/Production")
+if not USE_REGISTRY:
+    print("⚠️  Promotion step skipped — registry not available σε αυτό το workspace.")
+    print("   Στη production θα τρέχατε είτε set_registered_model_alias (UC) είτε transition_model_version_stage (workspace).")
+else:
+    try:
+        if USE_UC:
+            client.set_registered_model_alias(
+                name=model_name,
+                alias="production",
+                version=mv.version,
+            )
+            print(f"✓ Alias 'production' → version {mv.version}")
+        else:
+            client.transition_model_version_stage(
+                name=model_name,
+                version=mv.version,
+                stage="Production",
+                archive_existing_versions=True,
+            )
+            print(f"✓ Stage transitioned to Production για version {mv.version}")
 
-    # Update tag
-    client.set_model_version_tag(
-        name=model_name,
-        version=mv.version,
-        key="stage",
-        value="production",
-    )
-    print(f"✓ Tag updated: stage=production")
-except Exception as e:
-    print(f"⚠️  Promotion skipped (Free Edition limitation): {type(e).__name__}")
-    print(f"   Στη production θα τρέχατε είτε set_registered_model_alias είτε transition_model_version_stage.")
+        client.set_model_version_tag(
+            name=model_name,
+            version=mv.version,
+            key="stage",
+            value="production",
+        )
+        print(f"✓ Tag updated: stage=production")
+    except Exception as e:
+        print(f"⚠️  Promotion error: {type(e).__name__}: {e}")
 
 # COMMAND ----------
 
@@ -305,8 +320,10 @@ from pyspark.sql.functions import struct, current_timestamp, sha2, concat_ws, co
 from pyspark.sql.types import DoubleType
 
 # Φορτώνουμε το μοντέλο ως Spark UDF (για παραλληλισμό)
-# Επιλέγουμε σύνταξη model_uri ανάλογα με το mode
-if USE_UC:
+# Σε Free Edition χρησιμοποιούμε runs:/ URI απευθείας (registry δεν δουλεύει)
+if not USE_REGISTRY:
+    prod_model_uri = f"runs:/{run_id}/model"
+elif USE_UC:
     prod_model_uri = f"models:/{model_name}@production"
 else:
     prod_model_uri = f"models:/{model_name}/Production"
@@ -319,11 +336,12 @@ try:
     )
     print(f"✓ Model loaded as spark_udf από: {prod_model_uri}")
 except Exception as e:
-    # Fallback σε run-uri αν το registry δεν δουλεύει
-    print(f"⚠️  Registry load απέτυχε, χρησιμοποιούμε run URI: {type(e).__name__}")
+    # Fallback σε run-uri αν το registry-based load αποτύχει
+    print(f"⚠️  Load απέτυχε, fallback σε runs URI: {type(e).__name__}")
+    prod_model_uri = f"runs:/{run_id}/model"
     predict_udf = mlflow.pyfunc.spark_udf(
         spark,
-        model_uri=f"runs:/{run_id}/model",
+        model_uri=prod_model_uri,
         result_type=DoubleType(),
     )
 
