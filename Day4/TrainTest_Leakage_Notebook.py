@@ -35,12 +35,11 @@ import urllib.request
 import os
 
 # Unity Catalog Volume setup (αντί για /tmp).
-# Δημιουργία catalog/schema/volume αν δεν υπάρχουν (idempotent).
-spark.sql("CREATE CATALOG IF NOT EXISTS aade")
-spark.sql("CREATE SCHEMA  IF NOT EXISTS aade.default")
-spark.sql("CREATE VOLUME  IF NOT EXISTS aade.default.lab_data")
+# Δημιουργία schema/volume στο default `workspace` catalog (idempotent).
+spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
+spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
 
-volume_dir = "/Volumes/aade/default/lab_data"
+volume_dir = "/Volumes/workspace/aade/aade_data"
 os.makedirs(volume_dir, exist_ok=True)
 
 url = "https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/kep_requests.csv"
@@ -292,11 +291,9 @@ print(f"\n=== Final splits για παράδοση στον DS ===")
 print(f"Train rows: {train_clean.count():,}")
 print(f"Test rows:  {test_clean.count():,}")
 
-# Save στο Unity Catalog (catalog `aade`, schema `default`)
-# Σχόλιο: αν τρέχετε σε Free Edition / preview χωρίς δικαιώματα δημιουργίας tables,
-# αφήστε τα παρακάτω σχολιασμένα και χρησιμοποιήστε τα DataFrames in-memory.
-# train_clean.write.format("delta").mode("overwrite").saveAsTable("aade.default.kep_train_clean")
-# test_clean.write.format("delta").mode("overwrite").saveAsTable("aade.default.kep_test_clean")
+# Save στο Unity Catalog (catalog `workspace`, schema `aade`)
+train_clean.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.kep_train_clean")
+test_clean.write.format("delta").mode("overwrite").saveAsTable("workspace.aade.kep_test_clean")
 
 print("\n✓ Dataset έτοιμο για ML training (χωρίς leakage)")
 
