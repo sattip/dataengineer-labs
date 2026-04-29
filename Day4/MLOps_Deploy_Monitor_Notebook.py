@@ -172,30 +172,44 @@ USE_REGISTRY = True
 USE_UC = True  # Default για UC-enabled workspaces (αν αποτύχει, dropάρει σε False παρακάτω)
 model_name = "workspace.aade.aade_risk_scorer"
 
-client = MlflowClient()
+# Explicit set του registry URI σε UC. Παρά το env var, μερικές εκδόσεις mlflow
+# χρειάζονται το ρητό set_registry_uri για να ενημερωθεί το module state.
+mlflow.set_registry_uri("databricks-uc")
+client = MlflowClient(registry_uri="databricks-uc")
+
+print(f"→ MLflow registry URI: {mlflow.get_registry_uri()}")
+print(f"→ Tracking URI:        {mlflow.get_tracking_uri()}")
+print(f"→ Target model name:   {model_name}")
 
 # Register (ή skip αν registry not available)
 mv = None
 model_uri = f"runs:/{run_id}/model"
 try:
     mv = mlflow.register_model(model_uri=model_uri, name=model_name)
-    print(f"✓ Registered στο UC: {model_name} version {mv.version}")
+    print(f"\n✓ Registered στο UC: {model_name} version {mv.version}")
 except Exception as e:
     err_str = str(e)
-    print(f"⚠️  UC registration απέτυχε: {type(e).__name__}: {err_str[:200]}")
+    print(f"\n⚠️  UC registration απέτυχε: {type(e).__name__}")
+    print(f"    Full error: {err_str[:500]}")
     # Δοκιμάζουμε legacy workspace registry
     try:
         os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
         mlflow.set_registry_uri("databricks")
-        client = MlflowClient()
+        client = MlflowClient(registry_uri="databricks")
         model_name = "aade_risk_scorer"
         USE_UC = False
         mv = mlflow.register_model(model_uri=model_uri, name=model_name)
         print(f"✓ Registered στο workspace registry: {model_name} version {mv.version}")
     except Exception as e2:
         USE_REGISTRY = False
-        print(f"⚠️  Registry εντελώς disabled: {type(e2).__name__}")
-        print("   Συνεχίζουμε σε in-run mode — model URI: runs:/run_id/model")
+        print(f"⚠️  Workspace registry απέτυχε: {type(e2).__name__}")
+        print(f"    Full error: {str(e2)[:500]}")
+        print("\n   Συνεχίζουμε σε in-run mode — model URI: runs:/run_id/model")
+        print("   Πιθανές αιτίες:")
+        print("   1. Δεν έχετε CREATE MODEL privilege στο schema workspace.aade")
+        print("      → SQL: GRANT CREATE MODEL ON SCHEMA workspace.aade TO `<your_email>`")
+        print("   2. Το workspace δεν έχει Unity Catalog enabled (Free Edition το έχει by default)")
+        print("   3. Το DBR runtime του cluster δεν υποστηρίζει UC registry (χρειάζεται 13.0+)")
 
 # Demo placeholder version όταν registry δεν δουλεύει
 if mv is None:
