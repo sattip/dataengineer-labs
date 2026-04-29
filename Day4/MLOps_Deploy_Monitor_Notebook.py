@@ -66,6 +66,7 @@
 # COMMAND ----------
 
 import os
+import logging
 import urllib.request
 
 # CRITICAL: Set MLFLOW_REGISTRY_URI BEFORE any mlflow import/call.
@@ -74,6 +75,14 @@ import urllib.request
 # CONFIG_NOT_AVAILABLE. Με το env var, το mlflow short-circuits και
 # δεν φτάνει ποτέ στο spark.conf call.
 os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
+
+# Σιγάζουμε noisy GRPC warnings από Spark Connect probe failures.
+# Σε Free Edition/Serverless, το spark.conf.get() για κάποια keys αποτυγχάνει
+# με GRPC error, ο οποίος γίνεται handle εσωτερικά αλλά τυπώνεται στο output.
+# Αυτές οι warnings δεν επηρεάζουν την εκτέλεση — απλώς θόρυβος.
+logging.getLogger("pyspark.sql.connect.client.core").setLevel(logging.CRITICAL)
+logging.getLogger("py4j").setLevel(logging.CRITICAL)
+logging.getLogger("grpc").setLevel(logging.CRITICAL)
 
 # Unity Catalog setup (idempotent)
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
