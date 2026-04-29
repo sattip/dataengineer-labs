@@ -62,6 +62,28 @@
 # MAGIC Για να δουλέψουμε με ένα πραγματικό μοντέλο, εκπαιδεύουμε γρήγορα ένα baseline
 # MAGIC Random Forest σε συνθετικά δεδομένα ΑΑΔΕ. Σε production θα είχατε ήδη ένα
 # MAGIC trained model από προηγούμενο pipeline.
+# MAGIC
+# MAGIC ### 📚 Βασικές έννοιες — γρήγορο glossary
+# MAGIC
+# MAGIC | Όρος | Τι είναι |
+# MAGIC |---|---|
+# MAGIC | **Model** | Συνάρτηση που μαθαίνει patterns από data και κάνει προβλέψεις (input → output) |
+# MAGIC | **Training** | Η διαδικασία όπου το μοντέλο «μαθαίνει» από ιστορικά δεδομένα |
+# MAGIC | **Features** | Οι **input** στήλες (income, expenses, …) που χρησιμοποιεί το μοντέλο |
+# MAGIC | **Target** | Η **output** στήλη που θέλουμε να προβλέψουμε (π.χ. is_flagged) |
+# MAGIC | **Random Forest** | Ensemble από πολλά decision trees που «ψηφίζουν» — robust, εύκολο να εκπαιδευτεί |
+# MAGIC | **AUC** | Area Under ROC Curve — μετρική 0-1, **0.5=τύχη**, **1.0=τέλειο** |
+# MAGIC | **train/test split** | Χωρίζουμε τα data: 80% για μάθηση, 20% για αξιολόγηση σε «αόρατα» δεδομένα |
+# MAGIC | **stratify** | Διατηρεί την αναλογία κλάσεων (π.χ. 70% legit / 30% flagged) σε train & test |
+# MAGIC | **class_weight=balanced** | Δίνει μεγαλύτερο βάρος στη μειοψηφική κλάση ώστε το μοντέλο να μην την αγνοήσει |
+# MAGIC | **MLflow** | Open-source εργαλείο για tracking, registry, και deployment μοντέλων |
+# MAGIC | **MLflow run** | Μία εκτέλεση training — αποθηκεύει params, metrics, artifacts (model files) |
+# MAGIC | **artifact** | Αρχείο σχετικό με το run (model.pkl, plots, εκθέσεις, …) |
+# MAGIC
+# MAGIC ### 📚 Τι σημαίνει «AUC = 0.85»;
+# MAGIC > Αν τυχαία διαλέξετε 1 πραγματικά flagged δήλωση και 1 πραγματικά clean,
+# MAGIC > το μοντέλο θα δώσει υψηλότερο score στη flagged με πιθανότητα 85%.
+# MAGIC > **AUC > 0.7** = αξιοποιήσιμο **·** **AUC > 0.85** = πολύ καλό **·** **AUC ≈ 0.5** = άχρηστο.
 
 # COMMAND ----------
 
@@ -154,9 +176,28 @@ print(f"✓ Run ID: {run_id}")
 # MAGIC %md
 # MAGIC ## 🪜 Βήμα 1: Register στο MLflow Registry με tag 'staging'
 # MAGIC
+# MAGIC ### 📚 Τι είναι «Model Registry»;
+# MAGIC > Κεντρικό **μητρώο** όλων των μοντέλων του οργανισμού — σαν «GitHub για μοντέλα».
+# MAGIC > Κάθε register δίνει αυτόματα:
+# MAGIC > - **Όνομα** (π.χ. `aade_risk_scorer`)
+# MAGIC > - **Version** (1, 2, 3, …) — κάθε νέα εκδοχή κρατάει ιστορικότητα
+# MAGIC > - **Stages/Aliases** (staging → production → archived)
+# MAGIC > - **Tags** (key-value metadata, π.χ. `owner=ml_team`, `dataset=2024Q4`)
+# MAGIC > - **Lineage**: ποιο run δημιούργησε το μοντέλο, ποιος το έγραψε, με ποια data
+# MAGIC > - **Approval workflow**: ποιος είδε, ενέκρινε, archivάρισε
+# MAGIC
+# MAGIC ### ❓ Γιατί όχι απλώς να σώσω το model σε .pkl;
+# MAGIC | Πρόβλημα με .pkl files | Πώς το λύνει το Registry |
+# MAGIC |---|---|
+# MAGIC | Ποιο .pkl είναι production; | Alias `production` σε ακριβώς ένα version |
+# MAGIC | Ποιος το εκπαίδευσε; Με τι data; | Lineage tracking |
+# MAGIC | Πώς γυρίζω rollback σε προηγούμενη version; | `set_alias` σε προηγούμενο version |
+# MAGIC | Ποιος ενέκρινε το deployment; | Tags + audit log |
+# MAGIC
 # MAGIC ### 1α. Η ιδέα
 # MAGIC
-# MAGIC Το trained model ζει αυτή τη στιγμή σαν artifact ενός run. Δεν μπορεί να βρεθεί
+# MAGIC Το trained model ζει αυτή τη στιγμή σαν **artifact ενός run** (αρχείο στο
+# MAGIC filesystem που σώθηκε με `mlflow.sklearn.log_model()`). Δεν μπορεί να βρεθεί
 # MAGIC εύκολα από άλλη ομάδα. Δεν έχει version. Δεν έχει approval workflow.
 # MAGIC
 # MAGIC Με `mlflow.register_model()` γίνεται **catalog-level entity** με versioning,
@@ -164,8 +205,16 @@ print(f"✓ Run ID: {run_id}")
 # MAGIC
 # MAGIC ### 1β. Το όνομα
 # MAGIC
-# MAGIC Στο Unity Catalog ο πλήρης δρόμος είναι `catalog.schema.model_name`.
-# MAGIC Στην περίπτωσή μας: `workspace.aade.aade-risk-scorer`.
+# MAGIC Στο Unity Catalog ο πλήρης δρόμος είναι `catalog.schema.model_name`
+# MAGIC (3-part name — όπως ο πίνακας `workspace.aade.tax_features`).
+# MAGIC Στην περίπτωσή μας: `workspace.aade.aade_risk_scorer`.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «model URI»;
+# MAGIC > String που δείχνει σε ένα model artifact. Φόρμες:
+# MAGIC > - `runs:/<run_id>/model` — model του συγκεκριμένου run (πριν register)
+# MAGIC > - `models:/<name>/<version>` — registered model, συγκεκριμένη version
+# MAGIC > - `models:/<name>@production` — registered model, ό,τι έχει το alias `production` (UC)
+# MAGIC > - `models:/<name>/Production` — legacy stage (non-UC workspaces)
 
 # COMMAND ----------
 
@@ -267,6 +316,25 @@ else:
 # MAGIC %md
 # MAGIC ## 🪜 Βήμα 2: Promote σε 'production'
 # MAGIC
+# MAGIC ### 📚 Τι είναι «alias»;
+# MAGIC > Ονομασία που δείχνει σε συγκεκριμένη version του μοντέλου — σαν **git tag**
+# MAGIC > ή **DNS CNAME**. Π.χ. `production` → version 5.
+# MAGIC >
+# MAGIC > **Πώς δουλεύει το rollback**: αν version 6 είναι buggy, αλλάζουμε τον alias να
+# MAGIC > δείχνει σε version 5 — **χωρίς να αλλάξουμε γραμμή κώδικα** στα downstream
+# MAGIC > pipelines που χρησιμοποιούν `models:/aade_risk_scorer@production`.
+# MAGIC
+# MAGIC ### 📚 Stages vs Aliases — ποια διαφορά;
+# MAGIC | Παλιό σύστημα (workspace registry) | Νέο σύστημα (Unity Catalog) |
+# MAGIC |---|---|
+# MAGIC | Σταθερά stages: `None / Staging / Production / Archived` | Όποιο alias θέλετε: `production`, `champion`, `canary` |
+# MAGIC | Μόνο 1 version σε Production ταυτόχρονα | Πολλά aliases ταυτόχρονα |
+# MAGIC | `transition_model_version_stage()` | `set_registered_model_alias()` |
+# MAGIC | `models:/name/Production` URI | `models:/name@production` URI |
+# MAGIC
+# MAGIC Τα aliases είναι **πιο ευέλικτα**: μπορείτε να έχετε `champion` για το βασικό μοντέλο και
+# MAGIC `challenger` για A/B test ταυτόχρονα.
+# MAGIC
 # MAGIC ### 2α. Η μετάβαση
 # MAGIC
 # MAGIC Στο Unity Catalog δεν χρησιμοποιούμε πλέον τα παλιά stages (None/Staging/Production/Archived).
@@ -280,7 +348,7 @@ else:
 # MAGIC Δίνουμε στον alias `production` την τρέχουσα version. Παράλληλα ενημερώνουμε το tag.
 # MAGIC
 # MAGIC > **Σημείωση:** Σε production ΑΑΔΕ, αυτό το βήμα **δεν** το κάνει αυτόματα ένα CI job.
-# MAGIC > Απαιτείται 2 approvals: data scientist + compliance officer.
+# MAGIC > Απαιτείται 2 approvals: data scientist + compliance officer (governance gate).
 
 # COMMAND ----------
 
@@ -337,6 +405,22 @@ else:
 # MAGIC %md
 # MAGIC ## 🪜 Βήμα 3: Batch Scoring με spark_udf σε feature store table
 # MAGIC
+# MAGIC ### 📚 Τι είναι «batch scoring»;
+# MAGIC > Παίρνουμε **πολλές εγγραφές μαζί** (batch) και τις σκοράρουμε σε ένα job —
+# MAGIC > π.χ. όλες οι 5 εκατομμύρια ΑΦΜ της ΑΑΔΕ μία φορά τη νύχτα.
+# MAGIC > Αντίθετο του **real-time scoring** (μία πρόβλεψη τη φορά μέσω REST API).
+# MAGIC
+# MAGIC ### 📚 Τι είναι «UDF» (User-Defined Function);
+# MAGIC > Συνάρτηση που γράφεις εσύ και την εκτελεί ο Spark **παράλληλα** σε όλους τους
+# MAGIC > workers. Παράδειγμα: αντί να φέρουμε όλο το dataset σε έναν node και να
+# MAGIC > τρέξουμε το model σε for loop, κάθε worker σκοράρει το **κομμάτι** του.
+# MAGIC > Σε 10-node cluster → 10× πιο γρήγορα.
+# MAGIC
+# MAGIC ### 📚 Τι κάνει το `mlflow.pyfunc.spark_udf`;
+# MAGIC > Παίρνει το URI του μοντέλου, **κατεβάζει** το model σε όλους τους workers,
+# MAGIC > και επιστρέφει UDF που εφαρμόζεται με `df.withColumn("score", udf(*cols))`.
+# MAGIC > Δουλεύει με **οποιοδήποτε** mlflow model: sklearn, xgboost, pytorch, custom.
+# MAGIC
 # MAGIC ### 3α. Η ιδέα
 # MAGIC
 # MAGIC Το production μοντέλο πρέπει να σκοράρει εκατομμύρια εγγραφές καθημερινά.
@@ -347,6 +431,17 @@ else:
 # MAGIC
 # MAGIC Το `mlflow.pyfunc.spark_udf` παίρνει το URI του μοντέλου και επιστρέφει μια
 # MAGIC συνάρτηση Spark που μπορούμε να εφαρμόσουμε με `withColumn`.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «audit log» / «input hash»;
+# MAGIC > Για κάθε prediction κρατάμε γραμμή στο `prediction_audit` table με:
+# MAGIC > - **timestamp**: πότε σκοραρίστηκε
+# MAGIC > - **model_version**: ποια version του μοντέλου χρησιμοποιήθηκε
+# MAGIC > - **input_hash**: SHA-256 του input — αν αύριο ο πολίτης ισχυριστεί «δεν έβαλα
+# MAGIC >   ποτέ αυτά τα δεδομένα», συγκρίνουμε hashes και αποδεικνύουμε
+# MAGIC >   **non-repudiation** (μη αμφισβήτηση)
+# MAGIC > - **risk_score**: το score που έδωσε
+# MAGIC >
+# MAGIC > **Νομική απαίτηση** για EU AI Act high-risk systems: retention 7+ χρόνια.
 
 # COMMAND ----------
 
@@ -443,6 +538,24 @@ spark.table("workspace.aade.prediction_audit").show(3, truncate=False)
 # MAGIC %md
 # MAGIC ## 🪜 Βήμα 4: Real-time Endpoint με Databricks Model Serving
 # MAGIC
+# MAGIC ### 📚 Τι είναι «REST API» / «Endpoint»;
+# MAGIC > Ένα **HTTP URL** που δέχεται POST requests με JSON input και επιστρέφει JSON output.
+# MAGIC > Π.χ. `POST https://aade.gov.gr/api/score` με body `{"income": 50000}` →
+# MAGIC > απάντηση `{"risk_score": 0.73}`.
+# MAGIC >
+# MAGIC > Tο **Databricks Model Serving** δημιουργεί αυτόματα ένα τέτοιο URL για το μοντέλο
+# MAGIC > σας — με authentication, autoscaling, load balancing, monitoring «out of the box».
+# MAGIC
+# MAGIC ### 📚 Batch vs Real-time — πώς επιλέγουμε;
+# MAGIC | Σενάριο | Batch ✓ | Real-time ✓ |
+# MAGIC |---|---|---|
+# MAGIC | Νυχτερινό scoring 5M ΑΦΜ για audit prioritization | ✅ | |
+# MAGIC | Πολίτης υποβάλλει δήλωση στο TAXIS — χρειάζεται απάντηση σε <1s | | ✅ |
+# MAGIC | Daily report στο τμήμα ελέγχων | ✅ | |
+# MAGIC | Fraud detection σε ζωντανή συναλλαγή | | ✅ |
+# MAGIC | **Κόστος ανά prediction** | Πολύ χαμηλό | Υψηλότερο (always-on cluster) |
+# MAGIC | **Latency** | Λεπτά-ώρες | Δεκάδες ms |
+# MAGIC
 # MAGIC ### 4α. Η διαφορά από batch
 # MAGIC
 # MAGIC Το batch scoring είναι ιδανικό για 5 εκατομμύρια ΑΦΜ τη νύχτα.
@@ -515,6 +628,47 @@ print(json.dumps({"predictions": result.tolist()}, indent=2))
 
 # MAGIC %md
 # MAGIC ## 🪜 Βήμα 5: Drift Monitoring με PSI και KS test
+# MAGIC
+# MAGIC ### 📚 Τι είναι «drift»;
+# MAGIC > Όταν τα **πραγματικά δεδομένα σήμερα** είναι **διαφορετικά** από αυτά με τα οποία
+# MAGIC > εκπαιδεύσαμε το μοντέλο. Παραδείγματα από ΑΑΔΕ:
+# MAGIC > - **Πληθωρισμός 25%** → όλα τα incomes ανέβηκαν → το μοντέλο που έμαθε «income > 60k = high»
+# MAGIC >   τώρα flagάρει υπερβολικά πολύ κόσμο
+# MAGIC > - **Νέος φορολογικός νόμος** → άλλαξε ο tax_rate διανομής
+# MAGIC > - **COVID/πανδημία** → ξαφνική πτώση εισοδημάτων στους ΚΑΔ τουρισμού
+# MAGIC
+# MAGIC ### 📚 Δύο τύποι drift
+# MAGIC | Τύπος | Τι αλλάζει | Πώς το πιάνουμε |
+# MAGIC |---|---|---|
+# MAGIC | **Data drift (covariate shift)** | Αλλάζει η **κατανομή των features** | PSI / KS test (αυτό το lab) |
+# MAGIC | **Concept drift** | Αλλάζει η **σχέση features → target** | Παρακολουθούμε AUC/precision όταν έχουμε labels |
+# MAGIC | **Label drift** | Αλλάζει η **κατανομή του target** | Παρακολουθούμε class balance |
+# MAGIC
+# MAGIC ### 📚 Τι είναι «PSI» (Population Stability Index);
+# MAGIC > Αριθμός που μετράει **πόσο διαφέρει** η σημερινή κατανομή ενός feature από τη baseline.
+# MAGIC > **Πώς υπολογίζεται:**
+# MAGIC > 1. Χωρίζουμε το feature σε bins (π.χ. 10 «κουτιά» income brackets)
+# MAGIC > 2. Υπολογίζουμε ποσοστό σε κάθε bin για baseline (`b%`) και current (`c%`)
+# MAGIC > 3. PSI = Σ (c% − b%) × ln(c% / b%) σε όλα τα bins
+# MAGIC >
+# MAGIC > **Ερμηνεία**: **PSI < 0.1** σταθερό ✅ **·** **0.1-0.2** watch ⚠️ **·** **> 0.2** retrain 🚨
+# MAGIC
+# MAGIC ### 📚 Τι είναι «KS test» (Kolmogorov-Smirnov);
+# MAGIC > Στατιστικός έλεγχος που λέει αν δύο δείγματα προέρχονται από **ίδια κατανομή**.
+# MAGIC > Επιστρέφει:
+# MAGIC > - **statistic** (D): η μέγιστη απόσταση μεταξύ των δύο **CDFs** (cumulative distributions)
+# MAGIC > - **p-value**: αν είναι **< 0.05** → reject «είναι ίδια κατανομή» → **drift detected**
+# MAGIC >
+# MAGIC > Διαφορά από PSI: το KS δίνει **στατιστική σημαντικότητα** (αν διαφέρουν αληθινά),
+# MAGIC > ενώ το PSI δίνει **μέγεθος διαφοράς**. Καλό να βλέπουμε **και τα δύο**.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «baseline» / «retraining»;
+# MAGIC > **Baseline** = η κατανομή των features στο training set — αυτό το «ξέρει» το μοντέλο.
+# MAGIC > Πρέπει να την **παγώσουμε** σε Delta table την ημέρα του deployment.
+# MAGIC >
+# MAGIC > **Retraining** = όταν drift > threshold, ξανατρέχουμε όλο το training pipeline
+# MAGIC > με τα νέα data ώστε το μοντέλο να «μάθει» τη νέα πραγματικότητα.
+# MAGIC > Συνήθως αυτοματοποιημένο σε CI/CD pipeline.
 # MAGIC
 # MAGIC ### 5α. Η ιδέα
 # MAGIC
@@ -610,6 +764,26 @@ print("✓ Drift report saved → workspace.aade.drift_reports")
 # MAGIC %md
 # MAGIC ## 🪜 Βήμα 6: Production-grade additions (από το slide tip)
 # MAGIC
+# MAGIC ### 📚 Τι είναι το «EU AI Act»;
+# MAGIC > Ευρωπαϊκός κανονισμός (σε ισχύ από 2024-2026 σταδιακά) που κατηγοριοποιεί τα AI
+# MAGIC > συστήματα σε **4 επίπεδα κινδύνου**:
+# MAGIC > - **Unacceptable risk** (απαγορευμένα): social scoring, real-time biometric surveillance σε public space
+# MAGIC > - **High risk**: μοντέλα που **επηρεάζουν θεμελιώδη δικαιώματα** — π.χ. πρόσβαση σε εκπαίδευση,
+# MAGIC >   εργασία, δάνεια, **φορολογικός έλεγχος**, social benefits, justice
+# MAGIC > - **Limited risk**: chatbots, deepfakes — απαιτούν transparency disclosure
+# MAGIC > - **Minimal risk**: spam filters, video games — καμία υποχρέωση
+# MAGIC >
+# MAGIC > Το μοντέλο της ΑΑΔΕ είναι **High Risk** → πλήρης compliance υποχρέωση.
+# MAGIC
+# MAGIC ### 📚 Τι απαιτεί το EU AI Act για High-Risk συστήματα;
+# MAGIC | Άρθρο | Απαίτηση | Πώς το ικανοποιούμε στο lab |
+# MAGIC |---|---|---|
+# MAGIC | Art. 12 | **Audit logging** όλων των predictions | `prediction_audit` table με input_hash + timestamp |
+# MAGIC | Art. 13 | **Transparency** — εξήγηση κάθε απόφασης | SHAP top-3 features ανά flagged prediction |
+# MAGIC | Art. 14 | **Human oversight** — ποτέ auto-action για high-risk | review queue για score > 0.8 |
+# MAGIC | Art. 15 | **Robustness** — drift monitoring & retraining | PSI/KS daily checks (Βήμα 5) |
+# MAGIC | Art. 17 | **Quality management system** — version control, lineage | MLflow Registry (Βήμα 1) |
+# MAGIC
 # MAGIC Στη διαφάνεια αναφέρονται 3 πράγματα που πρέπει **πάντα** να προσθέτετε σε
 # MAGIC production deployment του δημοσίου τομέα. Τα τρία αυτά είναι νομικές υποχρεώσεις
 # MAGIC του EU AI Act για high-risk συστήματα.
@@ -630,6 +804,14 @@ print("✓ Drift report saved → workspace.aade.drift_reports")
 
 # MAGIC %md
 # MAGIC ### 6β. Human-in-the-loop για high-risk predictions
+# MAGIC
+# MAGIC ### 📚 Τι είναι «human-in-the-loop» (HITL);
+# MAGIC > Pattern όπου **άνθρωπος εγκρίνει** την τελική απόφαση πριν εκτελεστεί. Το AI
+# MAGIC > απλώς **προτείνει**. Π.χ. το μοντέλο λέει «ύποπτη δήλωση score=0.92» αλλά
+# MAGIC > **ελεγκτής** βλέπει την υπόθεση, εξετάζει context (π.χ. ο φορολογούμενος είχε
+# MAGIC > σοβαρό ατύχημα), και αποφασίζει αν θα γίνει έλεγχος.
+# MAGIC >
+# MAGIC > **Όχι automation σε high-risk decisions** — άρθρο 14 EU AI Act.
 # MAGIC
 # MAGIC Για κάθε prediction με score > threshold, **απαγορεύεται** auto-action.
 # MAGIC Πρέπει να γραφτεί σε review queue και να εγκριθεί από άνθρωπο.
@@ -657,8 +839,34 @@ print("  → Πάνε σε ελεγκτή για manual review πριν γίνε
 # MAGIC %md
 # MAGIC ### 6γ. SHAP explainability για κάθε flagged decision
 # MAGIC
-# MAGIC Όταν ο πολίτης ρωτήσει «γιατί ελέγχθηκα;», πρέπει να μπορούμε να εξηγήσουμε.
-# MAGIC Με SHAP, για κάθε prediction παίρνουμε τα top 3 features που οδήγησαν στο score.
+# MAGIC ### 📚 Τι είναι «SHAP»;
+# MAGIC > **SH**apley **A**dditive ex**P**lanations — μέθοδος που εξηγεί **γιατί** το μοντέλο
+# MAGIC > έδωσε συγκεκριμένο score σε μία γραμμή. Βασίζεται στη **θεωρία παιγνίων** του
+# MAGIC > Lloyd Shapley (Νόμπελ Οικονομικών 2012).
+# MAGIC >
+# MAGIC > **Τι κάνει**: «μοιράζει» το score σε **συνεισφορές ανά feature**. Παράδειγμα:
+# MAGIC > ```
+# MAGIC > Prediction: 0.87 (high risk)
+# MAGIC > Baseline (μέσος όρος όλων): 0.30
+# MAGIC > → Σύνολο: 0.30 + 0.57 = 0.87
+# MAGIC > Συνεισφορές:
+# MAGIC >   ↑ income_change_yoy = -65%   → +0.32 (μεγάλη πτώση εισοδήματος)
+# MAGIC >   ↑ expense_ratio = 95%        → +0.18 (πολύ ψηλά έξοδα)
+# MAGIC >   ↑ declaration_count = 1      → +0.07 (πρώτη δήλωση)
+# MAGIC > ```
+# MAGIC > Δηλαδή το μοντέλο **flagάρει** αυτή τη δήλωση **κυρίως** λόγω της ξαφνικής πτώσης
+# MAGIC > εισοδήματος και των φουσκωμένων εξόδων.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «TreeExplainer»;
+# MAGIC > Γρήγορη εκδοχή του SHAP **ειδικά για tree-based μοντέλα** (RandomForest, XGBoost, LightGBM).
+# MAGIC > Υπολογίζει τα ακριβή Shapley values σε O(TLD²) αντί για εκθετικό χρόνο των
+# MAGIC > generic explainers. Για 1 prediction: λίγα ms.
+# MAGIC
+# MAGIC ### 🎯 Πρακτικό σενάριο
+# MAGIC Όταν ο πολίτης ρωτήσει «γιατί ελέγχθηκα;», η ΑΑΔΕ πρέπει να απαντήσει με
+# MAGIC **κατανοητή εξήγηση** — όχι «έτσι αποφάσισε ο αλγόριθμος». Με SHAP, για κάθε
+# MAGIC prediction παίρνουμε τα **top 3 features** που οδήγησαν στο score, σε μορφή που
+# MAGIC ένας ελεγκτής μπορεί να εξηγήσει σε φυσική γλώσσα.
 
 # COMMAND ----------
 
@@ -734,6 +942,50 @@ print("\nΑυτή η εξήγηση πάει στο audit table για EU AI Act
 # MAGIC | Endpoint test χωρίς auth → 401 | Σωστά tokens στο header |
 # MAGIC | Drift detector χωρίς σταθερό baseline | Πάντα persisted baseline |
 # MAGIC | PSI threshold πολύ χαμηλό → false alerts | Tier system: 0.1 / 0.2 |
+# MAGIC
+# MAGIC ### 📖 Συνολικό Glossary του Lab
+# MAGIC
+# MAGIC | Όρος | Σύντομος ορισμός |
+# MAGIC |---|---|
+# MAGIC | **MLflow** | Open-source πλατφόρμα για tracking, registry, deployment μοντέλων |
+# MAGIC | **Run** | Μία εκτέλεση training — αποθηκεύει params, metrics, artifacts |
+# MAGIC | **Artifact** | Αρχείο σχετικό με run (model.pkl, plots, eval reports) |
+# MAGIC | **Registry** | Κεντρικό μητρώο μοντέλων με versioning + approval workflow |
+# MAGIC | **Model URI** | String που δείχνει σε model: `runs:/.../model`, `models:/name@alias` |
+# MAGIC | **Alias** | Ονομασία που δείχνει σε version (UC) — modern replacement των stages |
+# MAGIC | **Stage** | Παλιό σύστημα: None/Staging/Production/Archived (workspace registry) |
+# MAGIC | **Lineage** | Τι data + code παρήγαγε το μοντέλο — για audit & reproducibility |
+# MAGIC | **AUC** | Area Under ROC Curve — μετρική 0.5-1.0 για binary classification |
+# MAGIC | **Spark UDF** | Συνάρτηση που εκτελείται παράλληλα σε όλους τους Spark workers |
+# MAGIC | **Batch scoring** | Scoring πολλών εγγραφών μαζί σε scheduled job |
+# MAGIC | **Real-time scoring** | Scoring 1 εγγραφής τη φορά μέσω REST API |
+# MAGIC | **Endpoint** | HTTP URL που εξυπηρετεί predictions (Databricks Model Serving) |
+# MAGIC | **Audit log** | Πίνακας με κάθε prediction + timestamp + input_hash |
+# MAGIC | **Input hash** | SHA-256 του input — για non-repudiation σε νομικές αμφισβητήσεις |
+# MAGIC | **Drift** | Όταν τα data σήμερα διαφέρουν από τα training data |
+# MAGIC | **Data drift** | Αλλάζει η κατανομή των features (covariate shift) |
+# MAGIC | **Concept drift** | Αλλάζει η σχέση features → target |
+# MAGIC | **PSI** | Population Stability Index — μέγεθος απόκλισης κατανομών |
+# MAGIC | **KS test** | Kolmogorov-Smirnov — στατιστική σημαντικότητα διαφοράς |
+# MAGIC | **Baseline** | Παγωμένη κατανομή του training set για drift comparison |
+# MAGIC | **Retraining** | Ξανατρέχουμε training όταν drift > threshold |
+# MAGIC | **HITL** | Human-in-the-loop — άνθρωπος εγκρίνει κρίσιμες αποφάσεις |
+# MAGIC | **SHAP** | Shapley values — εξήγηση συνεισφοράς κάθε feature στο score |
+# MAGIC | **TreeExplainer** | Γρήγορος SHAP explainer για tree-based μοντέλα |
+# MAGIC | **EU AI Act** | Ευρωπαϊκός κανονισμός για AI — high-risk = αυστηρές υποχρεώσεις |
+# MAGIC | **Non-repudiation** | Νομική αρχή: ο εκδότης δεν μπορεί να αρνηθεί την ενέργεια |
+# MAGIC | **Champion/Challenger** | A/B test pattern: production model vs νέο για σύγκριση |
+# MAGIC
+# MAGIC ### 🧠 Mental model: τα 5 βήματα μαζί
+# MAGIC
+# MAGIC ```
+# MAGIC ┌─────────────┐    ┌──────────┐    ┌────────────┐    ┌──────────────┐    ┌──────────┐
+# MAGIC │ Trained     │──▶│ Registry │──▶│ Production │──▶│ Batch Score  │──▶│ Audit /  │
+# MAGIC │ Model (run) │    │ (v1)     │    │ Alias      │    │ + REST API   │    │ Drift /  │
+# MAGIC │             │    │          │    │            │    │              │    │ SHAP     │
+# MAGIC └─────────────┘    └──────────┘    └────────────┘    └──────────────┘    └──────────┘
+# MAGIC      Step 0           Step 1          Step 2          Steps 3 & 4         Steps 5 & 6
+# MAGIC ```
 # MAGIC
 # MAGIC ### 💡 Take-home message
 # MAGIC
