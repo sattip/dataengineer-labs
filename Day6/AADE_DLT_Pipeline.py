@@ -2,10 +2,27 @@
 # MAGIC %md
 # MAGIC # 🏛️ AADE DLT Pipeline — Declarative Bronze→Silver→Gold
 # MAGIC
-# MAGIC **ΣΗΜΑΝΤΙΚΟ:** Αυτό το notebook **ΔΕΝ τρέχεται απευθείας**! Είναι **source code**
-# MAGIC ενός Delta Live Tables pipeline. Πρέπει να δημιουργήσεις DLT pipeline στο
-# MAGIC **Workflows → Pipelines → Create pipeline** και να επιλέξεις αυτό το notebook
-# MAGIC ως **Source code**.
+# MAGIC # ⛔ ΜΗΝ ΠΑΤΗΣΕΙΣ "RUN ALL" ΕΔΩ! ⛔
+# MAGIC
+# MAGIC ## 🚨 Αυτό το notebook **ΔΕΝ τρέχεται σαν κανονικό notebook**
+# MAGIC
+# MAGIC Το `import dlt` δουλεύει **μόνο** μέσα σε DLT runtime — όχι σε regular cluster.
+# MAGIC Αν πατήσεις Run, θα δεις: `ModuleNotFoundError: No module named 'dlt'`
+# MAGIC
+# MAGIC ### ✅ Σωστή χρήση
+# MAGIC
+# MAGIC 1. Sidebar → **Workflows** → tab **Delta Live Tables** → **Create pipeline**
+# MAGIC 2. Στο form:
+# MAGIC    - **Pipeline name**: `aade_streaming_pipeline`
+# MAGIC    - **Pipeline mode**: Triggered
+# MAGIC    - **Source code**: Add → Notebook → επίλεξε **αυτό** το notebook
+# MAGIC    - **Catalog**: `workspace`
+# MAGIC    - **Target schema**: `aade`
+# MAGIC 3. **Create** → **Start**
+# MAGIC
+# MAGIC Πριν τρέξεις το pipeline: τρέξε πρώτα το `AADE_DLT_Generator` notebook
+# MAGIC (αυτό τρέχει κανονικά, σε regular cluster) για να δημιουργηθούν CSV files
+# MAGIC στο volume που θα διαβάσει το DLT pipeline.
 # MAGIC
 # MAGIC ## 🔗 Source URL
 # MAGIC > ```
