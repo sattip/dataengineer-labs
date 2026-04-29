@@ -8,26 +8,37 @@
 # MAGIC > https://raw.githubusercontent.com/sattip/dataengineer-labs/main/Day4/Feature_Engineering_Notebook.py
 # MAGIC > ```
 # MAGIC
-# MAGIC **Σενάριο**: Ομάδα DE της ΑΑΔΕ ετοιμάζει features για μοντέλο ML που εντοπίζει
-# MAGIC ασυνήθιστες φορολογικές δηλώσεις. Ξεκινάμε από raw δηλώσεις →
-# MAGIC καταλήγουμε σε καθαρό feature table.
+# MAGIC ## 🎯 Σενάριο
+# MAGIC Ομάδα DE της ΑΑΔΕ ετοιμάζει **features** για μοντέλο ML που εντοπίζει ασυνήθιστες
+# MAGIC φορολογικές δηλώσεις. Ξεκινάμε από raw δηλώσεις → καταλήγουμε σε καθαρό feature table.
 # MAGIC
-# MAGIC **Τι θα μάθετε:**
-# MAGIC - Imputation κενών τιμών με median
-# MAGIC - 6 features για ΑΑΔΕ context (tax_rate, is_high_income, YoY change, κλπ)
-# MAGIC - Quality checks σε features
-# MAGIC - Αποθήκευση σε Delta + correlation ranking
+# MAGIC ## 📚 Τι είναι «feature»;
+# MAGIC > **Feature** = μία στήλη που χρησιμοποιεί το μοντέλο ML για να κάνει πρόβλεψη.
+# MAGIC > Π.χ. το `income` είναι raw column. Το `tax_rate = tax_paid/income*100` είναι
+# MAGIC > **engineered feature** — το φτιάχνουμε εμείς από τα raw data γιατί είναι πιο
+# MAGIC > κατατοπιστικό για το μοντέλο.
 # MAGIC
-# MAGIC **Περιβάλλον:** Databricks Free Edition (Serverless)
-# MAGIC **Διάρκεια:** ~25-30 λεπτά
+# MAGIC ## 🧠 Τι θα μάθετε
+# MAGIC - **Imputation** κενών τιμών με **median** (διάμεσο)
+# MAGIC - **6 features** για ΑΑΔΕ context (tax_rate, is_high_income, YoY change, κλπ.)
+# MAGIC - **Window functions** (lag, count, avg) — υπολογισμοί ανά ομάδα γραμμών
+# MAGIC - **Quality checks** σε features πριν τα στείλουμε στο μοντέλο
+# MAGIC - Αποθήκευση σε **Delta** + **correlation ranking** (ποιο feature «μετράει» πιο πολύ)
+# MAGIC
+# MAGIC **Περιβάλλον:** Databricks Free Edition (Serverless) **·** **Διάρκεια:** ~25-30 λεπτά
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Βήμα 1: Schema & Volume Setup
 # MAGIC
-# MAGIC Δημιουργούμε schema `workspace.aade` και volume `workspace.aade.aade_data`
-# MAGIC αν δεν υπάρχουν. Όλοι οι πίνακες θα μπουν εδώ.
+# MAGIC ### 📚 Τι είναι «schema» και «volume»;
+# MAGIC - **Schema** (ή database): φάκελος που ομαδοποιεί πίνακες. Π.χ. `workspace.aade`
+# MAGIC   = όλοι οι πίνακες της ΑΑΔΕ.
+# MAGIC - **Volume**: φάκελος για **αρχεία** (CSV, Parquet, εικόνες) μέσα στο Unity Catalog.
+# MAGIC   Δίνει access control + audit log σε raw αρχεία.
+# MAGIC
+# MAGIC `CREATE … IF NOT EXISTS` = αν υπάρχει ήδη, μην πετάξεις error — απλώς συνέχισε.
 
 # COMMAND ----------
 
@@ -41,7 +52,13 @@ print("✓ Schema workspace.aade & Volume aade_data έτοιμα")
 # MAGIC ## Βήμα 2: Dataset Φορολογικών Δηλώσεων
 # MAGIC
 # MAGIC 20 εγγραφές = 8 φορολογούμενοι × 2-3 έτη (2023-2025).
-# MAGIC **Σκόπιμα έχουμε κενά** σε `income`, `expenses`, `tax_paid` για να δείξουμε imputation.
+# MAGIC **Σκόπιμα έχουμε κενά** (`None`) σε `income`, `expenses`, `tax_paid` για να
+# MAGIC δείξουμε imputation στο επόμενο βήμα.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «schema» στον πίνακα;
+# MAGIC > Διαφορετικό schema από πριν! Εδώ schema = η **δομή** του πίνακα: ποιες στήλες
+# MAGIC > έχει, τι τύπο (string/double/integer), και αν δέχονται null. Το ορίζουμε
+# MAGIC > ρητά για να αποφύγουμε type guessing από τον Spark.
 
 # COMMAND ----------
 
@@ -54,7 +71,7 @@ schema = StructType([
     StructField("name", StringType(), False),
     StructField("region", StringType(), False),
     StructField("year", IntegerType(), False),
-    StructField("income", DoubleType(), True),
+    StructField("income", DoubleType(), True),       # True = επιτρέπει null
     StructField("expenses", DoubleType(), True),
     StructField("tax_paid", DoubleType(), True),
     StructField("status", StringType(), False),
@@ -92,8 +109,15 @@ df_raw.show(truncate=False)
 # MAGIC %md
 # MAGIC ## Βήμα 3: Έλεγχος Missing Values
 # MAGIC
-# MAGIC Μετράμε **πόσα κενά** έχει κάθε στήλη. Σε production δεν αγνοούμε ποτέ nulls
-# MAGIC — ή τα γεμίζουμε (imputation) ή τα διώχνουμε.
+# MAGIC ### 📚 Τι είναι «missing value» / «null»;
+# MAGIC > Κενό κελί στον πίνακα. Σε Python = `None`, σε SQL = `NULL`.
+# MAGIC > Δεν είναι το ίδιο με `0` ή `""` — σημαίνει «δεν ξέρουμε την τιμή».
+# MAGIC
+# MAGIC Σε production δεν αγνοούμε ποτέ nulls — ή τα **γεμίζουμε** (imputation),
+# MAGIC ή τα **διώχνουμε**, ή κρατάμε flag «αυτό είναι null».
+# MAGIC
+# MAGIC Ο παρακάτω κώδικας μετράει πόσα null έχει κάθε στήλη:
+# MAGIC `count(when(col(c).isNull(), c))` = «μέτρα μόνο όπου είναι null».
 
 # COMMAND ----------
 
@@ -107,10 +131,30 @@ df_raw.filter(col("income").isNull()).select("afm", "name", "year", "income", "t
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 4: Imputation με Median
+# MAGIC ## Βήμα 4: Imputation με Median (Διάμεσο)
 # MAGIC
-# MAGIC Γεμίζουμε τα κενά με τη **διάμεσο** (median) — πιο ανθεκτικό από το μέσο όρο σε outliers.
-# MAGIC Π.χ. ένας φορολογούμενος με 1.000.000€ θα παραμορφώσει τον μέσο όρο, αλλά όχι τη διάμεσο.
+# MAGIC ### 📚 Τι είναι «median» (διάμεσος);
+# MAGIC > Ταξινομούμε όλες τις τιμές από μικρή σε μεγάλη. **Median** = η τιμή στη **μέση** της λίστας.
+# MAGIC >
+# MAGIC > Παράδειγμα: εισοδήματα = [25k, 31k, 35k, 42k, 110k]
+# MAGIC > - **Mean** (μέσος όρος) = (25+31+35+42+110)/5 = **48,6k**
+# MAGIC > - **Median** (διάμεσος) = **35k** (η μεσαία τιμή)
+# MAGIC >
+# MAGIC > Παρατηρήστε: το 110k τραβάει τον μέσο όρο πολύ ψηλά (τον «παραμορφώνει»).
+# MAGIC > Ο median αγνοεί το outlier — γι' αυτό προτιμάται σε μεταβλητές με ακραίες τιμές
+# MAGIC > (εισόδημα, τιμές ακινήτων κ.λπ.).
+# MAGIC
+# MAGIC ### 📚 Τι είναι «outlier»;
+# MAGIC > Τιμή πολύ μακριά από τις υπόλοιπες. Π.χ. ένας φορολογούμενος με 1.000.000€
+# MAGIC > σε δείγμα μέσου εισοδήματος 35k. Συχνά είναι λάθος καταχώρησης ή πραγματικά
+# MAGIC > σπάνια περίπτωση — και τα δύο μπορούν να μπερδέψουν το μοντέλο.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «imputation»;
+# MAGIC > Η διαδικασία **συμπλήρωσης** missing values με μια λογική τιμή. Συνήθεις στρατηγικές:
+# MAGIC > median, mean, mode (πιο συχνή τιμή), ή πρόβλεψη από άλλα features.
+# MAGIC
+# MAGIC `approxQuantile("income", [0.5], 0.01)` = «βρες την τιμή που είναι στο 50% του dataset
+# MAGIC (δηλαδή median), με ανοχή σφάλματος 1%». Είναι γρήγορος υπολογισμός σε big data.
 
 # COMMAND ----------
 
@@ -137,12 +181,17 @@ print(f"  tax_paid: {df_imputed.filter(col('tax_paid').isNull()).count()}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 5: Feature `tax_rate`
+# MAGIC ## Βήμα 5: Feature `tax_rate` (Φορολογικός Συντελεστής)
 # MAGIC
-# MAGIC **Φορολογικός συντελεστής** = `tax_paid / income × 100`.
+# MAGIC **Τύπος**: `tax_rate = tax_paid / income × 100`
 # MAGIC
-# MAGIC *Γιατί χρήσιμο*: ένας elegctής μπορεί να εντοπίσει ασυνήθιστα **χαμηλό** tax_rate
-# MAGIC σε σχέση με τον κλάδο/περιοχή — πιθανή υπο-δήλωση.
+# MAGIC Παράδειγμα: αν income = 50.000€ και tax_paid = 10.000€ → tax_rate = 20%.
+# MAGIC
+# MAGIC ### 🎯 Γιατί είναι χρήσιμο για ΑΑΔΕ
+# MAGIC Ο **ελεγκτής** μπορεί να εντοπίσει ασυνήθιστα **χαμηλό** tax_rate σε σχέση με
+# MAGIC τον κλάδο/περιοχή — πιθανή υπο-δήλωση εισοδήματος. Π.χ. αν ένας ελεύθερος
+# MAGIC επαγγελματίας στη Αττική δηλώνει tax_rate = 5% ενώ ο μέσος όρος είναι 22%,
+# MAGIC αξίζει διασταύρωση.
 
 # COMMAND ----------
 
@@ -154,10 +203,15 @@ df_feat.select("afm", "name", "year", "income", "tax_paid", "tax_rate").show(tru
 # MAGIC %md
 # MAGIC ## Βήμα 6: Feature `is_high_income`
 # MAGIC
-# MAGIC **Boolean** flag: 1 αν income > 60.000€, αλλιώς 0.
+# MAGIC ### 📚 Τι είναι «boolean feature»;
+# MAGIC > Στήλη που παίρνει μόνο **2 τιμές**: `1` (αληθές) ή `0` (ψευδές). Λέγεται και
+# MAGIC > **binary** ή **flag**. Εδώ: `is_high_income = 1` αν `income > 60.000€`, αλλιώς `0`.
 # MAGIC
-# MAGIC *Γιατί*: τα μοντέλα ML συχνά χειρίζονται διαφορετικά τα high-income brackets
-# MAGIC (π.χ. διαφορετικός tax tier, διαφορετικά risk patterns).
+# MAGIC ### 🎯 Γιατί χρήσιμο
+# MAGIC Τα μοντέλα ML συχνά χειρίζονται διαφορετικά τα **high-income brackets**:
+# MAGIC - διαφορετικός tax tier (κλίμακα φορολογίας)
+# MAGIC - διαφορετικά risk patterns (π.χ. πιο σύνθετες δηλώσεις, εισοδήματα από εξωτερικό)
+# MAGIC - διαφορετικός όγκος δεδομένων (λιγότεροι φορολογούμενοι αλλά μεγαλύτερα ποσά)
 
 # COMMAND ----------
 
@@ -169,10 +223,27 @@ df_feat.select("afm", "name", "year", "income", "is_high_income").show(truncate=
 # MAGIC %md
 # MAGIC ## Βήμα 7: Feature `income_change_yoy` (Year-over-Year)
 # MAGIC
-# MAGIC **% μεταβολή** εισοδήματος σε σχέση με το προηγούμενο έτος.
+# MAGIC ### 📚 Τι σημαίνει «YoY»;
+# MAGIC > **Year-over-Year** = «έτος-προς-έτος». Σύγκριση τιμής φέτος vs πέρυσι.
+# MAGIC > Τύπος: `(income_φέτος − income_πέρυσι) / income_πέρυσι × 100`.
+# MAGIC > Π.χ. πέρυσι 40k, φέτος 44k → YoY = +10%.
 # MAGIC
-# MAGIC *Γιατί*: ξαφνική **πτώση 50%** χωρίς προφανή λόγο = πιθανώς ύποπτη.
-# MAGIC Window function `lag()` φέρνει την προηγούμενη γραμμή ανά ΑΦΜ.
+# MAGIC ### 📚 Τι είναι «window function»;
+# MAGIC > Συνάρτηση που υπολογίζει αποτέλεσμα για κάθε γραμμή κοιτώντας **παράθυρο**
+# MAGIC > γραμμών γύρω της — συνήθως ομαδοποιημένο (π.χ. ανά ΑΦΜ) και ταξινομημένο
+# MAGIC > (π.χ. κατά έτος). Σε αντίθεση με το `groupBy` που μαζεύει σε μία γραμμή ανά group,
+# MAGIC > το window function **κρατάει όλες τις γραμμές** και προσθέτει νέα στήλη.
+# MAGIC
+# MAGIC ### 📚 Τι κάνει το `lag()`;
+# MAGIC > «Πάρε την τιμή της **προηγούμενης** γραμμής μέσα στο group». Δηλαδή για κάθε
+# MAGIC > φορολογούμενο (partitionBy `afm`), ταξινομημένο κατά `year`, το `lag("income", 1)`
+# MAGIC > μας δίνει το income του προηγούμενου έτους. Έτσι μπορούμε να συγκρίνουμε
+# MAGIC > φέτος vs πέρυσι στην ίδια γραμμή.
+# MAGIC
+# MAGIC ### 🎯 Γιατί χρήσιμο για ΑΑΔΕ
+# MAGIC Ξαφνική **πτώση 50%** στο εισόδημα χωρίς προφανή λόγο = πιθανώς ύποπτη.
+# MAGIC Αντίστροφα, ξαφνική **αύξηση 200%** ίσως δείχνει νέα δραστηριότητα που δεν έχει
+# MAGIC δηλωθεί σε άλλα μητρώα.
 
 # COMMAND ----------
 
@@ -195,8 +266,15 @@ df_feat.select("afm", "name", "year", "income", "income_change_yoy").show(trunca
 # MAGIC
 # MAGIC **Πόσες δηλώσεις** συνολικά έχει ο φορολογούμενος στο σύστημα.
 # MAGIC
-# MAGIC *Γιατί*: φορολογούμενοι με 1 μόνο δήλωση (νέοι ή sporadic) είναι διαφορετικό
-# MAGIC profile από αυτούς με 10+ δηλώσεις (σταθεροί).
+# MAGIC Εδώ χρησιμοποιούμε `Window.partitionBy("afm")` **χωρίς** orderBy — δηλαδή
+# MAGIC το παράθυρο = **όλες οι γραμμές** του ίδιου ΑΦΜ. Το `count("*").over(window)`
+# MAGIC μετράει πόσες γραμμές έχει κάθε group και προσθέτει το πλήθος ως στήλη.
+# MAGIC
+# MAGIC ### 🎯 Γιατί χρήσιμο για ΑΑΔΕ
+# MAGIC Φορολογούμενοι με **1 μόνο δήλωση** (νέοι ή σποραδικοί) έχουν διαφορετικό profile
+# MAGIC από αυτούς με **10+ δηλώσεις** (σταθεροί). Ένα νέο ΑΦΜ που εμφανίζεται με ψηλό
+# MAGIC εισόδημα από την πρώτη χρονιά χρειάζεται διαφορετικό έλεγχο από έναν έμπειρο
+# MAGIC δηλωτή με σταθερά μοτίβα 10ετίας.
 
 # COMMAND ----------
 
@@ -209,10 +287,14 @@ df_feat.select("afm", "name", "year", "declaration_count").show(truncate=False)
 # MAGIC %md
 # MAGIC ## Βήμα 9: Feature `avg_income_region`
 # MAGIC
-# MAGIC **Μέσο εισόδημα** ανά περιοχή & έτος.
+# MAGIC **Μέσος όρος εισοδήματος** ανά συνδυασμό περιοχής & έτους.
+# MAGIC `Window.partitionBy("region", "year")` = group ανά (Αττική-2023), (Αττική-2024), (Κρήτη-2023), …
+# MAGIC και `avg("income")` υπολογίζει τον μέσο όρο για κάθε ομάδα.
 # MAGIC
-# MAGIC *Γιατί*: ένα εισόδημα 30.000€ είναι «κανονικό» στην Κρήτη, ίσως «χαμηλό» στην Αττική.
-# MAGIC Το feature επιτρέπει στο μοντέλο να συγκρίνει με τον μέσο όρο της περιοχής.
+# MAGIC ### 🎯 Γιατί χρήσιμο για ΑΑΔΕ
+# MAGIC Ένα εισόδημα **30.000€** είναι «κανονικό» στην Κρήτη, ίσως «χαμηλό» στην Αττική.
+# MAGIC Το feature επιτρέπει στο μοντέλο να **συγκρίνει** τη δήλωση κάθε φορολογούμενου
+# MAGIC με τον μέσο όρο της περιοχής/έτους — context-aware risk scoring.
 
 # COMMAND ----------
 
@@ -225,10 +307,17 @@ df_feat.select("afm", "region", "year", "income", "avg_income_region").show(trun
 # MAGIC %md
 # MAGIC ## Βήμα 10: Feature `expense_ratio`
 # MAGIC
-# MAGIC **Λόγος δαπανών προς εισόδημα** σε ποσοστό.
+# MAGIC **Τύπος**: `expense_ratio = expenses / income × 100`
 # MAGIC
-# MAGIC *Γιατί*: expense_ratio > 80% σε επιχείρηση = ή πολύ συγκεκριμένος κλάδος
-# MAGIC (π.χ. εστίαση), ή φουσκωμένα έξοδα. Σημαντικό feature για audit prioritization.
+# MAGIC Δείχνει τι ποσοστό του εισοδήματος δηλώθηκε ως δαπάνη.
+# MAGIC
+# MAGIC ### 🎯 Γιατί χρήσιμο για ΑΑΔΕ
+# MAGIC - **expense_ratio > 80%** σε επιχείρηση = ή πολύ συγκεκριμένος κλάδος (π.χ. εστίαση,
+# MAGIC   λιανεμπόριο με χαμηλά περιθώρια) ή **φουσκωμένα έξοδα** για μείωση φόρου
+# MAGIC - **expense_ratio < 5%** σε ελεύθερο επαγγελματία = πιθανώς **υποδηλωμένα έξοδα**
+# MAGIC   ή πραγματικά υψηλό περιθώριο (π.χ. consultant)
+# MAGIC
+# MAGIC Σημαντικό feature για **audit prioritization** (ποιες δηλώσεις να ελεγχθούν πρώτες).
 
 # COMMAND ----------
 
@@ -240,11 +329,22 @@ df_feat.select("afm", "name", "year", "income", "expenses", "expense_ratio").sho
 # MAGIC %md
 # MAGIC ## Βήμα 11: Quality Checks
 # MAGIC
-# MAGIC Πριν κάνουμε save, **επαληθεύουμε**:
-# MAGIC 1. Δεν έχουμε nulls στα νέα features (πέρα από `income_change_yoy` στο πρώτο έτος)
-# MAGIC 2. Οι τιμές είναι σε λογικά εύρη (tax_rate ∈ [0, 100])
-# MAGIC 3. Distribution stats φαίνονται OK
-# MAGIC 4. Class balance σε boolean features (is_high_income)
+# MAGIC Πριν στείλουμε τα features στο μοντέλο, **επαληθεύουμε** 4 πράγματα:
+# MAGIC
+# MAGIC 1. **Nulls**: δεν έχουμε κενά στα νέα features (πέρα από `income_change_yoy`
+# MAGIC    στο πρώτο έτος κάθε ΑΦΜ — δεν υπάρχει «προηγούμενο» για lag).
+# MAGIC 2. **Range validation**: οι τιμές είναι σε λογικά εύρη
+# MAGIC    (π.χ. `tax_rate ∈ [0, 100]` — φορολογικός συντελεστής δεν μπορεί να είναι αρνητικός
+# MAGIC    ή >100%).
+# MAGIC 3. **Distribution stats**: min/max/mean/stddev φαίνονται OK (όχι παράξενες ακραίες τιμές).
+# MAGIC 4. **Class balance** σε boolean features (αν 99% είναι `is_high_income=0` και
+# MAGIC    1% είναι `1`, το dataset είναι **imbalanced** και το μοντέλο θα δυσκολευτεί
+# MAGIC    να μάθει την μειοψηφική κλάση).
+# MAGIC
+# MAGIC ### 📚 Τι είναι «describe()»;
+# MAGIC > Επιστρέφει συνοπτικά στατιστικά: count, mean, stddev, min, max ανά αριθμητική στήλη.
+# MAGIC > **stddev** (standard deviation, τυπική απόκλιση) = πόσο «απλωμένες» είναι οι τιμές
+# MAGIC > γύρω από τον μέσο όρο. Μικρή stddev = όλες οι τιμές κοντά στον mean· μεγάλη = πολύ διασκορπισμένες.
 
 # COMMAND ----------
 
@@ -271,8 +371,24 @@ df_feat.groupBy("is_high_income").count().show()
 # MAGIC %md
 # MAGIC ## Βήμα 12: Αποθήκευση σε Delta Table
 # MAGIC
-# MAGIC Saving features σε `workspace.aade.tax_features`. **Delta = ACID + time travel**:
-# MAGIC αν αύριο σπάσει κάτι, μπορούμε να γυρίσουμε σε προηγούμενη version.
+# MAGIC Σώζουμε τα features στον πίνακα `workspace.aade.tax_features`.
+# MAGIC
+# MAGIC ### 📚 Τι είναι «Delta»;
+# MAGIC > Format αποθήκευσης πινάκων στο Databricks. Σε αντίθεση με απλά Parquet/CSV:
+# MAGIC > - **ACID transactions**: αν δύο jobs γράφουν ταυτόχρονα, δεν χαλάνε ο ένας τον άλλον
+# MAGIC > - **Time travel**: μπορείς να διαβάσεις τον πίνακα **όπως ήταν χθες** (`VERSION AS OF 5`)
+# MAGIC > - **Schema enforcement**: αν προσπαθήσεις να βάλεις string σε integer στήλη, σε σταματάει
+# MAGIC > - **Upserts** (`MERGE`): update + insert σε μία εντολή
+# MAGIC
+# MAGIC ### 📚 Τι σημαίνει «ACID»;
+# MAGIC > **A**tomicity (όλα ή τίποτα) **·** **C**onsistency (μένει σε έγκυρη κατάσταση)
+# MAGIC > **·** **I**solation (ταυτόχρονες ενέργειες δεν αλληλοκόβονται)
+# MAGIC > **·** **D**urability (αφού γραφτεί, δεν χάνεται). Γνωστές εγγυήσεις από relational DBs,
+# MAGIC > τώρα και σε big data lakes χάρη στο Delta.
+# MAGIC
+# MAGIC ### 🎯 Γιατί σημαντικό για ΑΑΔΕ
+# MAGIC Αν αύριο σπάσει ένα feature pipeline και γράψει λανθασμένα data, μπορούμε να
+# MAGIC γυρίσουμε σε προηγούμενη version του πίνακα **χωρίς restore από backup**.
 
 # COMMAND ----------
 
@@ -294,8 +410,27 @@ print("✓ Delta Table δημιουργήθηκε: workspace.aade.tax_features")
 # MAGIC %md
 # MAGIC ## Βήμα 13: Feature Importance (Correlation με tax_paid)
 # MAGIC
-# MAGIC Ποιο feature **συσχετίζεται** πιο πολύ με τον φόρο που πληρώθηκε; Αυτό μας δίνει
-# MAGIC πρώτη εικόνα ποια features είναι «δυνατά» πριν χτίσουμε ML model.
+# MAGIC ### 📚 Τι είναι «correlation» (συσχέτιση);
+# MAGIC > Αριθμός από **−1 έως +1** που δείχνει πόσο «κινούνται μαζί» δύο μεταβλητές:
+# MAGIC > - **+1**: όταν αυξάνεται η μία, αυξάνεται και η άλλη (τέλεια θετική συσχέτιση)
+# MAGIC > - **0**: καμία σχέση
+# MAGIC > - **−1**: όταν αυξάνεται η μία, μειώνεται η άλλη (τέλεια αρνητική συσχέτιση)
+# MAGIC >
+# MAGIC > Παράδειγμα: ύψος ↔ βάρος = ~+0.7 (όχι τέλεια, αλλά σχετίζονται).
+# MAGIC > Χρώμα μαλλιών ↔ μισθός = ~0 (καμία σχέση).
+# MAGIC >
+# MAGIC > Στον Spark, η `df.stat.corr()` υπολογίζει **Pearson correlation** — γραμμική συσχέτιση.
+# MAGIC > Δεν πιάνει μη-γραμμικές σχέσεις (π.χ. καμπύλες U-shape).
+# MAGIC
+# MAGIC ### 🎯 Γιατί κάνουμε correlation πριν το ML
+# MAGIC Πρώτη εικόνα ποια features είναι «δυνατά» πριν ξοδέψουμε ώρες σε model training.
+# MAGIC Αν ένα feature έχει correlation ~0 με το target, μάλλον δεν προσφέρει τίποτα.
+# MAGIC Αντίστροφα, αν δύο features έχουν correlation ~1 μεταξύ τους, είναι **πλεονασμός**
+# MAGIC (κρατάμε το ένα).
+# MAGIC
+# MAGIC ⚠️ **Warning**: high correlation **δεν** σημαίνει causation. Π.χ. πωλήσεις παγωτού
+# MAGIC και πνιγμοί συσχετίζονται — όχι γιατί το παγωτό προκαλεί πνιγμό, αλλά γιατί και τα
+# MAGIC δύο αυξάνονται το καλοκαίρι.
 
 # COMMAND ----------
 
@@ -311,8 +446,8 @@ for feat in features_to_check:
 
 corr_schema = StructType([
     StructField("feature", StringType(), False),
-    StructField("abs_correlation", DoubleType(), False),
-    StructField("correlation", DoubleType(), False),
+    StructField("abs_correlation", DoubleType(), False),  # απόλυτη τιμή για ranking
+    StructField("correlation", DoubleType(), False),       # με πρόσημο (+/−) για ερμηνεία
 ])
 df_corr = spark.createDataFrame(correlations, corr_schema).orderBy(desc("abs_correlation"))
 
@@ -329,11 +464,11 @@ df_corr.show(truncate=False)
 # COMMAND ----------
 
 print("=== Σύνοψη Pipeline ===")
-print(f"  Αρχικές εγγραφές:     {df_raw.count()}")
+print(f"  Αρχικές εγγραφές:        {df_raw.count()}")
 print(f"  Features δημιουργήθηκαν: {len(feature_cols)}")
-print(f"  Missing values:       imputation με median")
-print(f"  Quality checks:       4 (nulls, range, distribution, balance)")
-print(f"  Delta Table:          workspace.aade.tax_features")
+print(f"  Missing values:          imputation με median")
+print(f"  Quality checks:          4 (nulls, range, distribution, balance)")
+print(f"  Delta Table:             workspace.aade.tax_features")
 print()
 print("  Top-3 features (correlation με tax_paid):")
 df_corr.limit(3).show(truncate=False)
@@ -343,18 +478,33 @@ df_corr.limit(3).show(truncate=False)
 # MAGIC %md
 # MAGIC ## ✅ Ολοκλήρωση
 # MAGIC
-# MAGIC ### Τι μάθατε:
-# MAGIC - **Imputation** missing values με median (resilient σε outliers)
-# MAGIC - **6 features** για ΑΑΔΕ context (tax_rate, is_high_income, YoY change, declaration_count, avg_income_region, expense_ratio)
-# MAGIC - **Window functions** (lag, count, avg) για aggregations χωρίς να χάνουμε τη λεπτομέρεια
-# MAGIC - **Quality checks** (nulls, range, distribution, balance)
+# MAGIC ### Τι μάθατε
+# MAGIC - **Imputation** missing values με **median** (ανθεκτικό σε outliers)
+# MAGIC - **6 features** για ΑΑΔΕ context: `tax_rate`, `is_high_income`, `income_change_yoy`,
+# MAGIC   `declaration_count`, `avg_income_region`, `expense_ratio`
+# MAGIC - **Window functions** (`lag`, `count`, `avg`) για aggregations χωρίς να χάνουμε λεπτομέρεια
+# MAGIC - **Quality checks** (nulls, range, distribution, balance) πριν παραδώσουμε στο ML
 # MAGIC - **Delta save** για ACID + time travel
 # MAGIC - **Correlation ranking** για πρώτη εικόνα feature importance
 # MAGIC
-# MAGIC ### Επόμενα βήματα (production):
-# MAGIC - Train/test split με **stratified sampling** (αν target imbalanced)
-# MAGIC - **Point-in-time correctness** (αποφυγή data leakage)
-# MAGIC - **Feature Store** για reusability μεταξύ μοντέλων
-# MAGIC - ML model training με MLflow tracking
+# MAGIC ### Έννοιες-κλειδιά (glossary)
+# MAGIC | Όρος | Ορισμός |
+# MAGIC |---|---|
+# MAGIC | **Median** | Η μεσαία τιμή σε ταξινομημένη λίστα — ανθεκτική σε outliers |
+# MAGIC | **Mean** | Μέσος όρος — ευαίσθητος σε outliers |
+# MAGIC | **Imputation** | Συμπλήρωση κενών τιμών με λογική εκτίμηση |
+# MAGIC | **Outlier** | Τιμή πολύ μακριά από τις υπόλοιπες |
+# MAGIC | **YoY** | Year-over-Year, % μεταβολή σε σχέση με πέρυσι |
+# MAGIC | **Window function** | Υπολογισμός ανά group γραμμών χωρίς collapse |
+# MAGIC | **Correlation** | Αριθμός [−1, +1] — πόσο «κινούνται μαζί» δύο μεταβλητές |
+# MAGIC | **Delta** | Format πίνακα με ACID + time travel |
+# MAGIC | **ACID** | Atomicity, Consistency, Isolation, Durability |
+# MAGIC
+# MAGIC ### Επόμενα βήματα (production)
+# MAGIC - **Train/test split** με **stratified sampling** (αν target imbalanced — διατηρεί
+# MAGIC   αναλογία κλάσεων σε train & test)
+# MAGIC - **Point-in-time correctness** (αποφυγή data leakage — δες Lab 2)
+# MAGIC - **Feature Store** για **reusability** μεταξύ μοντέλων (ίδιο feature → πολλά μοντέλα)
+# MAGIC - **ML model training** με MLflow tracking (δες Lab 3)
 # MAGIC
 # MAGIC **Note**: τρέχει πλήρως σε Databricks Free Edition (Serverless).
