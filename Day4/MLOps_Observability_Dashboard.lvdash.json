@@ -1,0 +1,552 @@
+{
+  "datasets": [
+    {
+      "name": "ds_health_status",
+      "displayName": "Overall Health Status",
+      "queryLines": [
+        "WITH latest_perf AS (\n",
+        "  SELECT auc FROM workspace.aade.mock_performance_history\n",
+        "  ORDER BY week_start DESC LIMIT 1\n",
+        "),\n",
+        "latest_drift AS (\n",
+        "  SELECT MAX(psi) AS max_psi FROM workspace.aade.mock_drift_history\n",
+        "  WHERE week_start = (SELECT MAX(week_start) FROM workspace.aade.mock_drift_history)\n",
+        "),\n",
+        "open_alerts AS (\n",
+        "  SELECT COUNT(*) AS open_count FROM workspace.aade.mock_alerts\n",
+        "  WHERE status = 'open' AND severity = 'critical'\n",
+        ")\n",
+        "SELECT\n",
+        "  ROUND((SELECT auc FROM latest_perf), 4)         AS current_auc,\n",
+        "  ROUND((SELECT max_psi FROM latest_drift), 4)    AS max_drift_psi,\n",
+        "  (SELECT open_count FROM open_alerts)            AS critical_alerts_open,\n",
+        "  CASE\n",
+        "    WHEN (SELECT open_count FROM open_alerts) > 0 THEN 'DEGRADED'\n",
+        "    WHEN (SELECT max_psi FROM latest_drift) > 0.2 THEN 'WATCH'\n",
+        "    WHEN (SELECT auc FROM latest_perf) < 0.8 THEN 'WATCH'\n",
+        "    ELSE 'HEALTHY'\n",
+        "  END                                              AS overall_status"
+      ]
+    },
+    {
+      "name": "ds_kpi_30d",
+      "displayName": "30-day KPIs",
+      "queryLines": [
+        "SELECT\n",
+        "  SUM(total_predictions)        AS predictions_30d,\n",
+        "  SUM(high_risk_count)          AS high_risk_30d,\n",
+        "  ROUND(AVG(high_risk_pct), 2)  AS avg_high_risk_pct_30d,\n",
+        "  ROUND(AVG(avg_risk_score), 4) AS avg_risk_score_30d\n",
+        "FROM workspace.aade.mock_predictions_timeseries\n",
+        "WHERE date >= DATE_SUB(current_date(), 30)"
+      ]
+    },
+    {
+      "name": "ds_daily_volume",
+      "displayName": "Daily Volume",
+      "queryLines": [
+        "SELECT date, total_predictions, high_risk_count, high_risk_pct, model_version\n",
+        "FROM workspace.aade.mock_predictions_timeseries\n",
+        "ORDER BY date"
+      ]
+    },
+    {
+      "name": "ds_drift_heatmap",
+      "displayName": "Drift PSI Heatmap",
+      "queryLines": [
+        "SELECT week_start, feature, psi, severity\n",
+        "FROM workspace.aade.mock_drift_history\n",
+        "ORDER BY week_start, feature"
+      ]
+    },
+    {
+      "name": "ds_performance",
+      "displayName": "Model Performance",
+      "queryLines": [
+        "SELECT week_start, auc, precision, recall, f1_score, model_version\n",
+        "FROM workspace.aade.mock_performance_history\n",
+        "ORDER BY week_start"
+      ]
+    },
+    {
+      "name": "ds_latency",
+      "displayName": "Endpoint Latency",
+      "queryLines": [
+        "SELECT ts, latency_p50_ms, latency_p95_ms, latency_p99_ms, error_rate_pct, rps\n",
+        "FROM workspace.aade.mock_endpoint_metrics\n",
+        "WHERE ts >= current_timestamp() - INTERVAL 24 HOURS\n",
+        "ORDER BY ts"
+      ]
+    },
+    {
+      "name": "ds_alerts",
+      "displayName": "Active Alerts",
+      "queryLines": [
+        "SELECT alert_id, fired_at, severity, metric, value, threshold, status, owner, incident_id\n",
+        "FROM workspace.aade.mock_alerts\n",
+        "WHERE status IN ('open', 'acknowledged')\n",
+        "ORDER BY\n",
+        "  CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,\n",
+        "  fired_at DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_main",
+      "displayName": "MLOps Observability — aade_risk_scorer",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_health",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_health_status",
+                  "fields": [
+                    { "name": "overall_status", "expression": "`overall_status`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "overall_status",
+                  "displayName": "Status"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Overall Health"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "w_predictions_30d",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi_30d",
+                  "fields": [
+                    { "name": "predictions_30d", "expression": "`predictions_30d`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "predictions_30d",
+                  "displayName": "Predictions (30d)",
+                  "format": { "type": "number-plain", "decimalPlaces": { "type": "exact", "places": 0 } }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Predictions (30d)" }
+            }
+          },
+          "position": { "x": 2, "y": 0, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "w_high_risk_30d",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi_30d",
+                  "fields": [
+                    { "name": "high_risk_30d", "expression": "`high_risk_30d`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "high_risk_30d",
+                  "displayName": "High-Risk (30d)",
+                  "format": { "type": "number-plain", "decimalPlaces": { "type": "exact", "places": 0 } }
+                }
+              },
+              "frame": { "showTitle": true, "title": "High-Risk Count (30d)" }
+            }
+          },
+          "position": { "x": 4, "y": 0, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "w_avg_high_risk_pct",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi_30d",
+                  "fields": [
+                    { "name": "avg_high_risk_pct_30d", "expression": "`avg_high_risk_pct_30d`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_high_risk_pct_30d",
+                  "displayName": "Avg High-Risk %",
+                  "format": { "type": "number-plain", "decimalPlaces": { "type": "exact", "places": 2 } }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Avg High-Risk %  (30d)" }
+            }
+          },
+          "position": { "x": 0, "y": 3, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "w_avg_score",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi_30d",
+                  "fields": [
+                    { "name": "avg_risk_score_30d", "expression": "`avg_risk_score_30d`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_risk_score_30d",
+                  "displayName": "Avg Risk Score",
+                  "format": { "type": "number-plain", "decimalPlaces": { "type": "exact", "places": 4 } }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Avg Risk Score (30d)" }
+            }
+          },
+          "position": { "x": 2, "y": 3, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "w_max_drift",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_health_status",
+                  "fields": [
+                    { "name": "max_drift_psi", "expression": "`max_drift_psi`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max_drift_psi",
+                  "displayName": "Max PSI",
+                  "format": { "type": "number-plain", "decimalPlaces": { "type": "exact", "places": 4 } }
+                }
+              },
+              "frame": { "showTitle": true, "title": "Max Drift PSI (latest week)" }
+            }
+          },
+          "position": { "x": 4, "y": 3, "width": 2, "height": 3 }
+        },
+        {
+          "widget": {
+            "name": "w_daily_volume",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_daily_volume",
+                  "fields": [
+                    { "name": "date", "expression": "`date`" },
+                    { "name": "total_predictions", "expression": "`total_predictions`" },
+                    { "name": "high_risk_pct", "expression": "`high_risk_pct`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "date",
+                  "scale": { "type": "temporal" },
+                  "displayName": "Date"
+                },
+                "y": [
+                  {
+                    "fieldName": "total_predictions",
+                    "scale": { "type": "quantitative" },
+                    "displayName": "Total Predictions",
+                    "chartType": "bar"
+                  },
+                  {
+                    "fieldName": "high_risk_pct",
+                    "scale": { "type": "quantitative" },
+                    "displayName": "High-Risk %",
+                    "chartType": "line",
+                    "axis": { "side": "right" }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Panel 1 — Daily Volume & High-Risk Rate (90 days)"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 6, "width": 6, "height": 8 }
+        },
+        {
+          "widget": {
+            "name": "w_drift_heatmap",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_drift_heatmap",
+                  "fields": [
+                    { "name": "week_start", "expression": "`week_start`" },
+                    { "name": "feature", "expression": "`feature`" },
+                    { "name": "psi", "expression": "`psi`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "week_start",
+                  "scale": { "type": "temporal" },
+                  "displayName": "Week"
+                },
+                "y": {
+                  "fieldName": "feature",
+                  "scale": { "type": "categorical" },
+                  "displayName": "Feature"
+                },
+                "color": {
+                  "fieldName": "psi",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": { "mode": "scheme", "scheme": "redyellowgreen", "reverse": true }
+                  },
+                  "displayName": "PSI"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Panel 2 — Drift PSI Heatmap (red = retrain needed)"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 14, "width": 6, "height": 8 }
+        },
+        {
+          "widget": {
+            "name": "w_performance",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_performance",
+                  "fields": [
+                    { "name": "week_start", "expression": "`week_start`" },
+                    { "name": "auc", "expression": "`auc`" },
+                    { "name": "precision", "expression": "`precision`" },
+                    { "name": "recall", "expression": "`recall`" },
+                    { "name": "f1_score", "expression": "`f1_score`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "week_start",
+                  "scale": { "type": "temporal" },
+                  "displayName": "Week"
+                },
+                "y": [
+                  { "fieldName": "auc", "displayName": "AUC" },
+                  { "fieldName": "precision", "displayName": "Precision" },
+                  { "fieldName": "recall", "displayName": "Recall" },
+                  { "fieldName": "f1_score", "displayName": "F1" }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Panel 3 — Model Performance Trend (Weekly)"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 22, "width": 3, "height": 8 }
+        },
+        {
+          "widget": {
+            "name": "w_latency",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_latency",
+                  "fields": [
+                    { "name": "ts", "expression": "`ts`" },
+                    { "name": "latency_p50_ms", "expression": "`latency_p50_ms`" },
+                    { "name": "latency_p95_ms", "expression": "`latency_p95_ms`" },
+                    { "name": "latency_p99_ms", "expression": "`latency_p99_ms`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "ts",
+                  "scale": { "type": "temporal" },
+                  "displayName": "Hour"
+                },
+                "y": [
+                  { "fieldName": "latency_p50_ms", "displayName": "p50 (ms)" },
+                  { "fieldName": "latency_p95_ms", "displayName": "p95 (ms)" },
+                  { "fieldName": "latency_p99_ms", "displayName": "p99 (ms)" }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Panel 4 — Endpoint Latency p50/p95/p99 (24h)"
+              }
+            }
+          },
+          "position": { "x": 3, "y": 22, "width": 3, "height": 8 }
+        },
+        {
+          "widget": {
+            "name": "w_error_rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_latency",
+                  "fields": [
+                    { "name": "ts", "expression": "`ts`" },
+                    { "name": "error_rate_pct", "expression": "`error_rate_pct`" },
+                    { "name": "rps", "expression": "`rps`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "ts",
+                  "scale": { "type": "temporal" },
+                  "displayName": "Hour"
+                },
+                "y": [
+                  { "fieldName": "error_rate_pct", "displayName": "Error rate (%)" },
+                  { "fieldName": "rps", "displayName": "RPS", "axis": { "side": "right" } }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Panel 5 — Error Rate & Throughput (24h)"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 30, "width": 6, "height": 7 }
+        },
+        {
+          "widget": {
+            "name": "w_alerts_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_alerts",
+                  "fields": [
+                    { "name": "alert_id", "expression": "`alert_id`" },
+                    { "name": "fired_at", "expression": "`fired_at`" },
+                    { "name": "severity", "expression": "`severity`" },
+                    { "name": "metric", "expression": "`metric`" },
+                    { "name": "value", "expression": "`value`" },
+                    { "name": "threshold", "expression": "`threshold`" },
+                    { "name": "status", "expression": "`status`" },
+                    { "name": "owner", "expression": "`owner`" },
+                    { "name": "incident_id", "expression": "`incident_id`" }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "alert_id", "displayName": "Alert ID", "type": "string" },
+                  { "fieldName": "fired_at", "displayName": "Fired", "type": "datetime" },
+                  { "fieldName": "severity", "displayName": "Severity", "type": "string" },
+                  { "fieldName": "metric", "displayName": "Metric", "type": "string" },
+                  { "fieldName": "value", "displayName": "Value", "type": "float" },
+                  { "fieldName": "threshold", "displayName": "Threshold", "type": "float" },
+                  { "fieldName": "status", "displayName": "Status", "type": "string" },
+                  { "fieldName": "owner", "displayName": "Owner", "type": "string" },
+                  { "fieldName": "incident_id", "displayName": "Incident", "type": "string" }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Panel 6 — Active & Acknowledged Alerts"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 37, "width": 6, "height": 8 }
+        }
+      ]
+    }
+  ]
+}
