@@ -219,7 +219,7 @@ print(f"\n✓ Batch {batch_id} written → 4 sources, {50+80+120+60} total rows"
 
 # COMMAND ----------
 
-from pyspark.sql.functions import current_timestamp, lit, input_file_name, col
+from pyspark.sql.functions import current_timestamp, lit, col
 
 
 def bronze_stream(source_name, target_table):
@@ -236,7 +236,8 @@ def bronze_stream(source_name, target_table):
         .option("cloudFiles.inferColumnTypes", "true")
         .load(src_path)
         .withColumn("_ingested_at", current_timestamp())
-        .withColumn("_source_file", input_file_name())
+        # _metadata είναι UC-compatible (αντικαθιστά το input_file_name() που δεν υποστηρίζεται)
+        .withColumn("_source_file", col("_metadata.file_path"))
         .withColumn("_source", lit(source_name))
     )
 
