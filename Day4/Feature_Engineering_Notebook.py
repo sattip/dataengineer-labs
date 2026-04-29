@@ -345,13 +345,46 @@ df_feat.select("afm", "name", "year", "income", "expenses", "expense_ratio").sho
 # MAGIC > Επιστρέφει συνοπτικά στατιστικά: count, mean, stddev, min, max ανά αριθμητική στήλη.
 # MAGIC > **stddev** (standard deviation, τυπική απόκλιση) = πόσο «απλωμένες» είναι οι τιμές
 # MAGIC > γύρω από τον μέσο όρο. Μικρή stddev = όλες οι τιμές κοντά στον mean· μεγάλη = πολύ διασκορπισμένες.
+# MAGIC
+# MAGIC ⚠️ **Αν δεν τρέξατε όλα τα cells με τη σειρά (5→6→7→8→9→10)**, το παρακάτω cell
+# MAGIC ξαναχτίζει αυτόματα τα features που λείπουν.
 
 # COMMAND ----------
 
-feature_cols = ["tax_rate", "is_high_income", "income_change_yoy",
-                "declaration_count", "avg_income_region", "expense_ratio"]
+# Self-healing: αν λείπει κάποιο feature (π.χ. δεν τρέξατε όλα τα cells), το ξαναχτίζουμε
+required_features = ["tax_rate", "is_high_income", "income_change_yoy",
+                     "declaration_count", "avg_income_region", "expense_ratio"]
+missing = [f for f in required_features if f not in df_feat.columns]
+if missing:
+    print(f"⚠️ Λείπουν features: {missing} — τα ξαναχτίζω τώρα...")
+    if "tax_rate" not in df_feat.columns:
+        df_feat = df_feat.withColumn("tax_rate", spark_round(col("tax_paid") / col("income") * 100, 2))
+    if "is_high_income" not in df_feat.columns:
+        df_feat = df_feat.withColumn("is_high_income", when(col("income") > 60000, lit(1)).otherwise(lit(0)))
+    if "income_change_yoy" not in df_feat.columns:
+        w_yoy = Window.partitionBy("afm").orderBy("year")
+        df_feat = (df_feat
+            .withColumn("prev_income", lag("income", 1).over(w_yoy))
+            .withColumn("income_change_yoy",
+                spark_round(
+                    when(col("prev_income").isNotNull(),
+                         (col("income") - col("prev_income")) / col("prev_income") * 100)
+                    .otherwise(lit(None)), 2))
+            .drop("prev_income"))
+    if "declaration_count" not in df_feat.columns:
+        df_feat = df_feat.withColumn("declaration_count", count("*").over(Window.partitionBy("afm")))
+    if "avg_income_region" not in df_feat.columns:
+        df_feat = df_feat.withColumn("avg_income_region",
+                                     spark_round(avg("income").over(Window.partitionBy("region", "year")), 2))
+    if "expense_ratio" not in df_feat.columns:
+        df_feat = df_feat.withColumn("expense_ratio", spark_round(col("expenses") / col("income") * 100, 2))
+    print(f"✓ Όλα τα features είναι πλέον διαθέσιμα: {required_features}")
+else:
+    print(f"✓ Όλα τα features ήδη υπάρχουν: {required_features}")
 
-print("=== Check 1: Nulls ===")
+feature_cols = required_features
+
+print("\n=== Check 1: Nulls ===")
 df_feat.select([count(when(col(c).isNull(), c)).alias(c) for c in feature_cols]).show()
 
 print("=== Check 2: Range Validation ===")
