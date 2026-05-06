@@ -252,14 +252,20 @@ display(spark.sql(f"SELECT * FROM {BRONZE} LIMIT 5"))
 # MAGIC %md
 # MAGIC ## Cell 3 — DQ split → Silver staging + Quarantine
 # MAGIC
-# MAGIC Πριν προχωρήσουμε σε SCD Type 2, **καθαρίζουμε** το bronze. Οι κανόνες είναι ίδιοι με Άσκηση 3:
+# MAGIC Δύο δουλειές μαζί:
+# MAGIC
+# MAGIC ### 3α. Schema mapping (Ελληνικά → canonical English)
+# MAGIC
+# MAGIC Το CSV από το mainframe έχει **ελληνικά ονόματα στηλών** (`ΑΦΜ`, `Ποσό_EUR`, `Ημερομηνία`, `Κατάσταση`, ...). Αυτή είναι η **πηγή της αλήθειας** για το Bronze. Στο silver/gold όμως θέλουμε **canonical English names** για readability + downstream tooling. Η μετονομασία γίνεται **μία φορά** εδώ — από εδώ και κάτω, όλα τα cells δουλεύουν με τα clean English names.
+# MAGIC
+# MAGIC ### 3β. DQ split
 # MAGIC
 # MAGIC | Κανόνας | Συνέπεια |
 # MAGIC |---------|----------|
 # MAGIC | `afm` IS NOT NULL AND length 9 | Drop → quarantine |
 # MAGIC | `tax_amount` >= 0 | Drop → quarantine |
 # MAGIC | `submission_date` parseable | Drop → quarantine |
-# MAGIC | `status` ∈ {Υποβληθέν, Ακυρωμένο, Εκκρεμές} | Map → "UNKNOWN" + flag |
+# MAGIC | `status` ∈ {Απορριφθείσα, Εγκεκριμένη, Εκκρεμής} | Map → "UNKNOWN" + flag |
 # MAGIC
 # MAGIC Όλοι οι rejected πάνε στο `declarations_quarantine` με `_quarantine_reason`. Σε production: alerts όταν quarantine_pct > X%.
 
@@ -272,12 +278,27 @@ SILVER_STAGING = "workspace.aade.declarations_silver_staging"
 
 bronze_df = spark.table(BRONZE)
 
-# Build a single _quarantine_reason column (first failing rule wins)
-checked = bronze_df.withColumn(
+# 3α. Map Greek source names → canonical English aliases.
+#     Defensive casts: ΑΦΜ might be inferred as bigint by Auto Loader,
+#     but we want a STRING (preserves leading zeros + length check).
+mapped = bronze_df.select(
+    col("`ΔηλωσηID`").cast("string").alias("declaration_id"),
+    col("`ΑΦΜ`").cast("string").alias("afm"),
+    col("`ΔΟΥID`").cast("string").alias("doy_code"),
+    col("`Ποσό_EUR`").cast("double").alias("tax_amount"),
+    col("`Κατάσταση`").alias("status"),
+    expr("try_to_date(cast(`Ημερομηνία` as string), 'yyyy-MM-dd')").alias("submission_date"),
+    col("_src_file"),
+    col("_ingestion_ts"),
+    col("_rescued_data"),
+)
+
+# 3β. Build a single _quarantine_reason column (first failing rule wins)
+checked = mapped.withColumn(
     "_quarantine_reason",
     when(col("afm").isNull() | (length(trim(col("afm"))) != 9), lit("BAD_AFM"))
-    .when(col("tax_amount").cast("double") < 0, lit("NEGATIVE_AMOUNT"))
-    .when(expr("try_to_date(submission_date, 'yyyy-MM-dd')").isNull(), lit("BAD_DATE"))
+    .when(col("tax_amount") < 0, lit("NEGATIVE_AMOUNT"))
+    .when(col("submission_date").isNull(), lit("BAD_DATE"))
     .otherwise(lit(None))
 )
 
@@ -288,12 +309,13 @@ bad.write.format("delta").mode("overwrite").option("overwriteSchema", "true") \
 print(f"🚫 quarantined: {bad.count()} rows → {QUARANTINE}")
 
 # Good rows → silver staging (with normalized status)
+VALID_STATUSES = ["Απορριφθείσα", "Εγκεκριμένη", "Εκκρεμής"]
 good = (
     checked.filter(col("_quarantine_reason").isNull())
     .drop("_quarantine_reason")
     .withColumn(
         "status_norm",
-        when(col("status").isin("Υποβληθέν", "Ακυρωμένο", "Εκκρεμές"), col("status"))
+        when(col("status").isin(*VALID_STATUSES), col("status"))
         .otherwise(lit("UNKNOWN")),
     )
 )
@@ -351,13 +373,13 @@ from pyspark.sql.functions import sha2, concat_ws, current_date
 
 initial = (
     spark.table(SILVER_STAGING)
-    .selectExpr(
-        "declaration_id",
-        "afm",
-        "doy_code",
-        "CAST(tax_amount AS DOUBLE) AS tax_amount",
-        "status_norm",
-        "try_to_date(submission_date, 'yyyy-MM-dd') AS submission_date",
+    .select(
+        col("declaration_id"),
+        col("afm"),
+        col("doy_code"),
+        col("tax_amount"),
+        col("status_norm"),
+        col("submission_date"),
     )
     # _hash = fingerprint of attributes that we track for changes
     .withColumn(
@@ -425,13 +447,24 @@ spark.sql(f"SELECT COUNT(*) AS bronze_rows, COUNT(DISTINCT _src_file) AS files F
 
 # COMMAND ----------
 
-# 3) re-run DQ split (overwrite staging from full bronze)
+# 3) re-run DQ split (overwrite staging from full bronze) — same map+check as Cell 3
 bronze_df = spark.table(BRONZE)
-checked = bronze_df.withColumn(
+mapped = bronze_df.select(
+    col("`ΔηλωσηID`").cast("string").alias("declaration_id"),
+    col("`ΑΦΜ`").cast("string").alias("afm"),
+    col("`ΔΟΥID`").cast("string").alias("doy_code"),
+    col("`Ποσό_EUR`").cast("double").alias("tax_amount"),
+    col("`Κατάσταση`").alias("status"),
+    expr("try_to_date(cast(`Ημερομηνία` as string), 'yyyy-MM-dd')").alias("submission_date"),
+    col("_src_file"),
+    col("_ingestion_ts"),
+    col("_rescued_data"),
+)
+checked = mapped.withColumn(
     "_quarantine_reason",
     when(col("afm").isNull() | (length(trim(col("afm"))) != 9), lit("BAD_AFM"))
-    .when(col("tax_amount").cast("double") < 0, lit("NEGATIVE_AMOUNT"))
-    .when(expr("try_to_date(submission_date, 'yyyy-MM-dd')").isNull(), lit("BAD_DATE"))
+    .when(col("tax_amount") < 0, lit("NEGATIVE_AMOUNT"))
+    .when(col("submission_date").isNull(), lit("BAD_DATE"))
     .otherwise(lit(None))
 )
 good = (
@@ -439,7 +472,7 @@ good = (
     .drop("_quarantine_reason")
     .withColumn(
         "status_norm",
-        when(col("status").isin("Υποβληθέν", "Ακυρωμένο", "Εκκρεμές"), col("status"))
+        when(col("status").isin(*VALID_STATUSES), col("status"))
         .otherwise(lit("UNKNOWN")),
     )
 )
@@ -462,7 +495,7 @@ if sample_ids:
     spark.sql(f"""
         UPDATE {SILVER_STAGING}
         SET tax_amount = tax_amount * 1.10,
-            status_norm = 'Ακυρωμένο'
+            status_norm = 'Απορριφθείσα'
         WHERE declaration_id IN ({",".join([f"'{i}'" for i in sample_ids])})
     """)
     print(f"💉 injected corrections for: {sample_ids}")
@@ -485,13 +518,13 @@ else:
 # Build the staging-with-hash CTE-like view
 staging_hashed = (
     spark.table(SILVER_STAGING)
-    .selectExpr(
-        "declaration_id",
-        "afm",
-        "doy_code",
-        "CAST(tax_amount AS DOUBLE) AS tax_amount",
-        "status_norm",
-        "try_to_date(submission_date, 'yyyy-MM-dd') AS submission_date",
+    .select(
+        col("declaration_id"),
+        col("afm"),
+        col("doy_code"),
+        col("tax_amount"),
+        col("status_norm"),
+        col("submission_date"),
     )
     .withColumn(
         "_hash",
@@ -593,8 +626,10 @@ SELECT
   COUNT(*)                                    AS declarations,
   SUM(tax_amount)                             AS total_tax,
   AVG(tax_amount)                             AS avg_tax,
-  SUM(CASE WHEN status_norm = 'Ακυρωμένο' THEN 1 ELSE 0 END) AS cancelled,
-  SUM(CASE WHEN status_norm = 'UNKNOWN'   THEN 1 ELSE 0 END) AS unknown_status
+  SUM(CASE WHEN status_norm = 'Απορριφθείσα' THEN 1 ELSE 0 END) AS rejected,
+  SUM(CASE WHEN status_norm = 'Εγκεκριμένη'  THEN 1 ELSE 0 END) AS approved,
+  SUM(CASE WHEN status_norm = 'Εκκρεμής'     THEN 1 ELSE 0 END) AS pending,
+  SUM(CASE WHEN status_norm = 'UNKNOWN'      THEN 1 ELSE 0 END) AS unknown_status
 FROM {SILVER}
 WHERE is_current = true
   AND submission_date IS NOT NULL
