@@ -63,6 +63,49 @@
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## Cell 0 — 🧹 Schema safety / auto-migration
+# MAGIC
+# MAGIC Τρέχει **πάντα πρώτο**. Αν εντοπίσει `pipeline_runs` από προηγούμενη παλιά έκδοση (4-col schema), το drop-άρει για να ξαναδημιουργηθεί καθαρά στο Cell 2 με το νέο 8-col schema.
+# MAGIC
+# MAGIC Είναι **idempotent**: αν το schema είναι ήδη καινούργιο, δεν κάνει τίποτα.
+
+# COMMAND ----------
+
+def _table_exists(fqn):
+    try:
+        spark.sql(f"DESCRIBE TABLE {fqn}")
+        return True
+    except Exception:
+        return False
+
+def _table_has_column(fqn, col_name):
+    if not _table_exists(fqn):
+        return False
+    cols = [r["col_name"] for r in spark.sql(f"DESCRIBE TABLE {fqn}").collect()]
+    return col_name in cols
+
+spark.sql("CREATE CATALOG IF NOT EXISTS aade_lab")
+spark.sql("CREATE SCHEMA IF NOT EXISTS aade_lab.public")
+
+# Migrate pipeline_runs αν είναι παλιό
+if _table_exists("aade_lab.public.pipeline_runs") \
+   and not _table_has_column("aade_lab.public.pipeline_runs", "stage"):
+    spark.sql("DROP TABLE aade_lab.public.pipeline_runs")
+    print("⚠️  Παλιό pipeline_runs (4-col) εντοπίστηκε — dropped. Θα δημιουργηθεί ξανά στο Cell 2.")
+else:
+    print("✅ pipeline_runs schema OK (ή δεν υπάρχει ακόμα)")
+
+# Migrate daily_kpis αν είναι παλιό (δεν είχε run_id σε παλιά πρώιμη έκδοση)
+if _table_exists("aade_lab.public.daily_kpis") \
+   and not _table_has_column("aade_lab.public.daily_kpis", "run_id"):
+    spark.sql("DROP TABLE aade_lab.public.daily_kpis")
+    print("⚠️  Παλιό daily_kpis εντοπίστηκε — dropped. Θα δημιουργηθεί ξανά στο Cell 2.")
+else:
+    print("✅ daily_kpis schema OK (ή δεν υπάρχει ακόμα)")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## Cell 1 — Configurable widgets (controlled demos)
 # MAGIC
 # MAGIC Με widgets μπορούμε στο Job UI να ορίσουμε:
@@ -95,23 +138,7 @@ import time
 from datetime import datetime
 from pyspark.sql.functions import current_timestamp, lit, col, when, expr, rand, sum as spark_sum, count
 
-spark.sql("CREATE CATALOG IF NOT EXISTS aade_lab")
-spark.sql("CREATE SCHEMA IF NOT EXISTS aade_lab.public")
-
-# --- Schema migration check ---
-# Αν υπάρχει `pipeline_runs` από προηγούμενη έκδοση (4-col schema), drop & recreate.
-# Έτσι αποφεύγουμε το CAST_INVALID_INPUT error όταν κάνουμε INSERT με 8 columns.
-def _table_has_column(fqn, col_name):
-    try:
-        cols = [r["col_name"] for r in spark.sql(f"DESCRIBE TABLE {fqn}").collect()]
-        return col_name in cols
-    except Exception:
-        return False
-
-if _table_has_column("aade_lab.public.pipeline_runs", "run_id") \
-   and not _table_has_column("aade_lab.public.pipeline_runs", "stage"):
-    print("⚠️  Old `pipeline_runs` schema detected — migrating to new 8-column schema...")
-    spark.sql("DROP TABLE aade_lab.public.pipeline_runs")
+# Catalog/schema είναι ήδη έτοιμα από Cell 0. Migration handled εκεί.
 
 # Audit table — per-stage events (new schema)
 spark.sql("""
