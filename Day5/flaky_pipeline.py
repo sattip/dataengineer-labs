@@ -41,6 +41,24 @@
 # MAGIC 3. Email notification on failure + retry policy (Βήματα 4-5)
 # MAGIC 4. **Run πολλές φορές** — μερικά τρέχουν success, μερικά failure
 # MAGIC 5. SQL Alert (Βήμα 6) παρακολουθεί `pipeline_runs.status = 'FAILED'`
+# MAGIC
+# MAGIC ## 🎬 Πλήρες demo recipe (~30 min)
+# MAGIC
+# MAGIC Για ολοκληρωμένο live demo που δείχνει **ΚΑΙ success ΚΑΙ failure** scenarios, τρέξε αυτή τη σειρά runs (από το Job → **Run now with different parameters** σε κάθε βήμα):
+# MAGIC
+# MAGIC | # | force_mode | failure_rate | Τι θα δουν οι εκπαιδευόμενοι | Διάρκεια |
+# MAGIC |---|------------|--------------|------------------------------|----------|
+# MAGIC | 1 | `success` | (any) | **Καθαρό success run** — όλα τα 4 stages πράσινα, Gold KPIs γράφτηκαν, no email sent | 3' |
+# MAGIC | 2 | `fail_dq` | (any) | **DQ failure** — Bronze ✅, DQ ❌, Silver/Gold SKIPPED, email arrives | 3' |
+# MAGIC | 3 | `fail_schema` | (any) | **Silver failure** (schema drift) — DQ ✅, Silver ❌, retry policy kicks in | 5' |
+# MAGIC | 4 | `fail_transient` | (any) | **Transient Gold error** — όλα τα tabs πράσινα μέχρι το Gold, retry policy το διορθώνει στο 2ο attempt | 5' |
+# MAGIC | 5 | `auto` | `0.3` | **Realistic mixed** — τρέξε 3-4 φορές, δες mix success/fail στο audit table | 5' |
+# MAGIC | 6 | — | — | **SQL Editor**: query το `pipeline_runs`, δες full audit trail | 4' |
+# MAGIC | 7 | — | — | **SQL Alert**: δες το alert να γίνεται triggered + email arrives | 5' |
+# MAGIC
+# MAGIC **Σύνολο**: ~30 λεπτά για demo που καλύπτει success path, multiple failure modes, retries, audit logging, και SQL Alerts.
+# MAGIC
+# MAGIC > 💡 **Όλα τα tables (`pipeline_runs`, `daily_kpis`) είναι additive** — κάθε run προσθέτει rows. Στο τέλος του demo θα έχεις rich audit table για να δείξεις πραγματικό production-grade observability.
 
 # COMMAND ----------
 
