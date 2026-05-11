@@ -98,7 +98,22 @@ from pyspark.sql.functions import current_timestamp, lit, col, when, expr, rand,
 spark.sql("CREATE CATALOG IF NOT EXISTS aade_lab")
 spark.sql("CREATE SCHEMA IF NOT EXISTS aade_lab.public")
 
-# Audit table — per-stage events
+# --- Schema migration check ---
+# Αν υπάρχει `pipeline_runs` από προηγούμενη έκδοση (4-col schema), drop & recreate.
+# Έτσι αποφεύγουμε το CAST_INVALID_INPUT error όταν κάνουμε INSERT με 8 columns.
+def _table_has_column(fqn, col_name):
+    try:
+        cols = [r["col_name"] for r in spark.sql(f"DESCRIBE TABLE {fqn}").collect()]
+        return col_name in cols
+    except Exception:
+        return False
+
+if _table_has_column("aade_lab.public.pipeline_runs", "run_id") \
+   and not _table_has_column("aade_lab.public.pipeline_runs", "stage"):
+    print("⚠️  Old `pipeline_runs` schema detected — migrating to new 8-column schema...")
+    spark.sql("DROP TABLE aade_lab.public.pipeline_runs")
+
+# Audit table — per-stage events (new schema)
 spark.sql("""
   CREATE TABLE IF NOT EXISTS aade_lab.public.pipeline_runs (
     run_id          STRING,
