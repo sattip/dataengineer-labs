@@ -164,8 +164,12 @@ with mlflow.start_run(run_name="aade_risk_baseline") as run:
     mlflow.log_metric("auc", auc)
     mlflow.log_params({"n_estimators": 100, "max_depth": 10})
 
-    # Log model
-    mlflow.sklearn.log_model(model, artifact_path="model")
+    # Log model — try modern API (MLflow 2.20+) πρώτα, fallback σε legacy
+    try:
+        mlflow.sklearn.log_model(sk_model=model, name="model")
+    except TypeError:
+        # MLflow < 2.20 χρησιμοποιεί artifact_path
+        mlflow.sklearn.log_model(model, artifact_path="model")
     run_id = run.info.run_id
 
 print(f"\n✓ Baseline trained. AUC = {auc:.4f}")
