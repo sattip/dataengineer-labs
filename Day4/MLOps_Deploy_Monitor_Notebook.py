@@ -102,9 +102,34 @@ os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 # Σε Free Edition/Serverless, το spark.conf.get() για κάποια keys αποτυγχάνει
 # με GRPC error, ο οποίος γίνεται handle εσωτερικά αλλά τυπώνεται στο output.
 # Αυτές οι warnings δεν επηρεάζουν την εκτέλεση — απλώς θόρυβος.
-logging.getLogger("pyspark.sql.connect.client.core").setLevel(logging.CRITICAL)
-logging.getLogger("py4j").setLevel(logging.CRITICAL)
-logging.getLogger("grpc").setLevel(logging.CRITICAL)
+
+# Level suppression για τους named loggers
+for _name in ("pyspark.sql.connect.client.core", "pyspark.sql.connect",
+              "pyspark", "py4j", "grpc"):
+    logging.getLogger(_name).setLevel(logging.CRITICAL)
+
+
+# Filter που drop-άρει GRPC-related messages από handler level
+# (Το setLevel μόνο δεν αρκεί γιατί τα messages προπαγάνδονται στους root handlers)
+class _DropGrpcNoise(logging.Filter):
+    def filter(self, record):
+        msg = str(record.getMessage()) if record.args is None else record.msg
+        return not (
+            "GRPC Error received" in str(msg)
+            or "_handle_rpc_error" == record.funcName
+            or "rpc_error" in str(msg).lower()
+            or "Config(req" in str(msg)
+        )
+
+
+_grpc_filter = _DropGrpcNoise()
+# Apply σε ΟΛΟΥΣ τους handlers (root + named loggers)
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_grpc_filter)
+# Apply και σε self level σε περίπτωση που νέοι handlers δημιουργηθούν αργότερα
+for _name in ("pyspark.sql.connect.client.core", "pyspark.sql.connect",
+              "pyspark", "py4j", "grpc", ""):
+    logging.getLogger(_name).addFilter(_grpc_filter)
 
 # Unity Catalog setup (idempotent)
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
