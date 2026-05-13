@@ -76,11 +76,60 @@
 # COMMAND ----------
 
 import time
+import logging
 from pyspark.sql import functions as F
 from pyspark.sql.functions import (
     col, lit, expr, rand, when, broadcast, concat_ws,
-    floor, count, sum as spark_sum, avg
+    floor, count, sum as spark_sum, avg, spark_partition_id
 )
+
+# Σιγάζουμε noisy GRPC warnings σε Spark Connect (Free Edition Serverless)
+for _n in ("pyspark.sql.connect.client.core", "pyspark.sql.connect",
+           "pyspark", "py4j", "grpc"):
+    logging.getLogger(_n).setLevel(logging.CRITICAL)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 🔧 SERVERLESS COMPATIBILITY HELPERS
+# ─────────────────────────────────────────────────────────────────────────
+# Το Free Edition Serverless τρέχει σε Spark Connect — έχει 3 περιορισμούς
+# που σπάνε «classic» Spark code:
+#   1. `sc` (SparkContext) δεν είναι διαθέσιμο
+#   2. RDD operations (`.rdd.*`) απαγορεύονται
+#   3. `spark.conf.set(...)` αποτυγχάνει για κάποια keys (AQE, broadcast)
+# Παρακάτω helpers κάνουν fallback ώστε ο κώδικας να τρέχει και σε
+# classic cluster και σε Serverless.
+# ═════════════════════════════════════════════════════════════════════════
+
+def get_partition_count(df) -> int:
+    """DataFrame-only count των partitions (αποφεύγει το df.rdd.getNumPartitions())."""
+    try:
+        return df.rdd.getNumPartitions()
+    except Exception:
+        return df.withColumn("__pid", spark_partition_id()) \
+                 .select("__pid").distinct().count()
+
+
+def safe_conf_set(key: str, value: str) -> bool:
+    """Try spark.conf.set — αν αποτύχει σε Serverless, log warning και continue."""
+    try:
+        spark.conf.set(key, value)
+        return True
+    except Exception as e:
+        if "CONFIG_NOT_AVAILABLE" in str(e) or "not available" in str(e):
+            print(f"  ⚠️  Cannot set {key}={value} σε Serverless (read-only). Continuing με defaults.")
+        else:
+            print(f"  ⚠️  spark.conf.set('{key}') failed: {type(e).__name__}")
+        return False
+
+
+def safe_conf_get(key: str, default: str = "—") -> str:
+    """Try spark.conf.get — αν αποτύχει, επιστρέφει default."""
+    try:
+        return spark.conf.get(key)
+    except Exception:
+        return default
+
 
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
 spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
@@ -192,11 +241,12 @@ spark.table("workspace.aade.declarations_big").groupBy("Περιφέρεια").c
 
 # COMMAND ----------
 
-# Δες πόσα cores έχει το cluster
-print(f"defaultParallelism (cores διαθέσιμοι): {sc.defaultParallelism}")
+# Δες shuffle partitions (Serverless-safe — `sc.defaultParallelism` δεν διαθέσιμο)
+print(f"shuffle partitions config: {safe_conf_get('spark.sql.shuffle.partitions')}")
+print(f"adaptive enabled:          {safe_conf_get('spark.sql.adaptive.enabled')}")
 
 df = spark.table("workspace.aade.declarations_big")
-print(f"Default partitions του DataFrame: {df.rdd.getNumPartitions()}")
+print(f"Default partitions του DataFrame: {get_partition_count(df)}")
 
 # Δες πόσα rows ανά partition (γρήγορος sanity check για skew)
 from pyspark.sql.functions import spark_partition_id
@@ -231,15 +281,15 @@ partition_sizes.show(20)
 
 df = spark.table("workspace.aade.declarations_big")
 
-print(f"Αρχικά partitions: {df.rdd.getNumPartitions()}")
+print(f"Αρχικά partitions: {get_partition_count(df)}")
 
 # repartition → shuffle, ομοιόμορφα 16 partitions
 df16 = df.repartition(16)
-print(f"Μετά από repartition(16): {df16.rdd.getNumPartitions()}")
+print(f"Μετά από repartition(16): {get_partition_count(df16)}")
 
 # coalesce → χωρίς shuffle, στρίβει τα partitions
 df_coal = df.coalesce(4)
-print(f"Μετά από coalesce(4): {df_coal.rdd.getNumPartitions()}")
+print(f"Μετά από coalesce(4): {get_partition_count(df_coal)}")
 
 # Παρατήρηση: το coalesce ΔΕΝ ισορροπεί τα δεδομένα — απλά «συγχωνεύει» partitions
 sizes_coal = (df_coal.withColumn("pid", spark_partition_id())
@@ -584,7 +634,7 @@ df.groupBy("Περιφέρεια").count() \
 print("="*60)
 print("BAD — groupBy('Περιφέρεια') χωρίς skew handling")
 print("="*60)
-spark.conf.set("spark.sql.adaptive.enabled", "false")  # για να δούμε καθαρά το skew
+safe_conf_set("spark.sql.adaptive.enabled", "false")  # για να δούμε καθαρά το skew
 t0 = time.time()
 df.groupBy("Περιφέρεια").agg(spark_sum("tax_amount")).collect()
 print(f"  time: {time.time()-t0:.2f}s")
@@ -693,8 +743,8 @@ doy_dim.show(5)
 # COMMAND ----------
 
 # BAD — shuffle join (default σε shuffle αν AQE είναι disabled)
-spark.conf.set("spark.sql.adaptive.enabled", "false")
-spark.conf.set("spark.sql.autoBroadcastJoinThreshold", "-1")  # disable auto-broadcast
+safe_conf_set("spark.sql.adaptive.enabled", "false")
+safe_conf_set("spark.sql.autoBroadcastJoinThreshold", "-1")  # disable auto-broadcast
 
 print("="*60)
 print("BAD — Shuffle join")
@@ -758,7 +808,7 @@ df = spark.table("workspace.aade.declarations_big")
 print("="*60)
 print("AQE DISABLED — manual skew handling needed")
 print("="*60)
-spark.conf.set("spark.sql.adaptive.enabled", "false")
+safe_conf_set("spark.sql.adaptive.enabled", "false")
 t0 = time.time()
 df.groupBy("Περιφέρεια").agg(spark_sum("tax_amount")).collect()
 t_off = time.time() - t0
@@ -767,8 +817,8 @@ print(f"  time: {t_off:.2f}s")
 print("\n" + "="*60)
 print("AQE ENABLED — auto-handles skew")
 print("="*60)
-spark.conf.set("spark.sql.adaptive.enabled", "true")
-spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+safe_conf_set("spark.sql.adaptive.enabled", "true")
+safe_conf_set("spark.sql.adaptive.skewJoin.enabled", "true")
 t0 = time.time()
 df.groupBy("Περιφέρεια").agg(spark_sum("tax_amount")).collect()
 t_on = time.time() - t0
