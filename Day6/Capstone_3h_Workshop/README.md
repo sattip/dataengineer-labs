@@ -51,7 +51,7 @@
 | 7 | Schema Evolution | New columns auto-merge | 12' |
 | 8 | Time Travel + RESTORE | Delta versioning, rollback | 13' |
 
-### Capstone: Audit Priority (30 min)
+### Capstone: Audit Priority (20 min implementation + 15 min presentations)
 End-to-end pipeline: 2 sources (TAXIS + myDATA) → Silver με DQ → Gold top-100 suspects.
 
 ## 🎓 Learning Outcomes

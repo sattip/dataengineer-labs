@@ -291,8 +291,9 @@ SET TAGS ('sensitivity' = 'pii', 'compliance' = 'gdpr');
 | Repartition σε every step | Repartition only πριν heavy operation |
 | Cache everywhere | Cache only αν διαβάζεται 2+ φορές |
 | GRANT σε individual users | GRANT σε groups |
-| `mlflow.log_model(model, artifact_path="model")` | `mlflow.log_model(sk_model=model, name="model")` |
 | MERGE χωρίς matching key index | OPTIMIZE + ZORDER στη join column πριν MERGE |
+| MERGE με source που έχει extra cols vs target | Drop `_*` metadata cols πριν το MERGE ή ορίστε explicit `set={}` |
+| `foreachBatch(lambda df: ...)` με 1 arg | `def f(df, batch_id):` — πάντα 2 args |
 
 ---
 

@@ -40,7 +40,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from pyspark.sql import functions as F
 from pyspark.sql.functions import (
-    col, lit, when, current_timestamp, upper, trim, length,
+    col, lit, when, current_timestamp, to_timestamp, upper, trim, length,
     row_number, lag, sum as spark_sum, avg, count, desc
 )
 from pyspark.sql.window import Window

@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # 🏆 Day 6 — Capstone Mini-Project
 # MAGIC
-# MAGIC **Duration:** 60 minutes (Hour 3)
+# MAGIC **Duration:** 20 minutes implementation + 15 minutes presentations (Hour 3)
 # MAGIC **Mode:** No hints, no starter code — **εσείς σχεδιάζετε και υλοποιείτε**
 # MAGIC **Prerequisites:** Ολοκληρώσατε Blocks A + B
 # MAGIC

@@ -77,7 +77,9 @@ silver_clean = (bronze
     .filter(col("tax_amount") >= 0)
     .filter(col("region") != "INVALID")
     .withColumn("status", upper(trim(col("status"))))
-    .withColumn("submitted_at", to_timestamp(col("submitted_at"))))
+    .withColumn("submitted_at", to_timestamp(col("submitted_at")))
+    # Drop Bronze metadata cols ώστε το επόμενο MERGE (Ex3) να ταιριάζει schema-wise
+    .drop("_ingested_at", "_source_file"))
 
 silver_clean.write.format("delta").mode("overwrite").saveAsTable(f"{SCHEMA}.silver_tax_clean")
 
@@ -278,8 +280,9 @@ for attempt in range(2):
 history = spark.sql(f"DESCRIBE HISTORY {SCHEMA}.silver_stream_tax")
 history.select("version", "timestamp", "operation").show(truncate=False)
 
-# Find το pre-UPDATE version (το UPDATE είναι το latest)
-update_version = history.first()["version"]
+# Find το pre-UPDATE version — explicit ordering (όχι first() χωρίς orderBy)
+latest_op = history.orderBy(desc("version")).first()
+update_version = latest_op["version"]
 pre_update_version = update_version - 1
 
 # Sub-task 2: verify previous version
@@ -398,11 +401,15 @@ mydata_agg = (silver_mydata
         spark_sum("total_amount").alias("total_invoiced_amount"),
     ))
 
+# Aggregate by afm ONLY για να αποφύγουμε row duplication αν 1 ΑΦΜ έχει 2 regions
 taxis_agg = (silver_taxis
-    .groupBy("afm", "region")
-    .agg(spark_sum("declared_income").alias("declared_income")))
+    .groupBy("afm")
+    .agg(
+        spark_sum("declared_income").alias("declared_income"),
+        F.first("region", ignorenulls=True).alias("region"),
+    ))
 
-# Join + score + rank
+# Join + score + rank — null-safe division (αντί για NULLIF στο SQL)
 joined = (taxis_agg
     .join(mydata_agg, "afm", "left")
     .fillna({"total_invoices_count": 0, "total_invoiced_amount": 0.0})

@@ -29,8 +29,10 @@ import numpy as np
 from datetime import datetime, timedelta
 from pyspark.sql import functions as F
 from pyspark.sql.functions import (
-    col, lit, when, current_timestamp, to_timestamp, upper, length
+    col, lit, when, current_timestamp, to_timestamp, upper, length,
+    row_number, desc
 )
+from pyspark.sql.window import Window
 from delta.tables import DeltaTable
 
 for n in ("pyspark.sql.connect.client.core", "pyspark.sql.connect",
@@ -391,8 +393,32 @@ print(f"✅ Batch 3 with NEW column written: {batch3_path}")
 # COMMAND ----------
 
 # TODO: Auto Loader stream με schema evolution enabled
+#
+# ⚠️ Pattern για να αντιμετωπίσετε το expected UnknownFieldException:
+#
+# for attempt in range(2):
+#     try:
+#         q = (spark.readStream
+#             .format("cloudFiles")
+#             .option("cloudFiles.format", "csv")
+#             .option("cloudFiles.schemaLocation", f"{checkpoint_dir}/bronze_stream/_schema")
+#             .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+#             ...
+#             .writeStream
+#             ...
+#             .option("mergeSchema", "true")
+#             .trigger(availableNow=True)
+#             .toTable(f"{SCHEMA}.bronze_stream_tax"))
+#         q.awaitTermination()
+#         print(f"✓ Attempt {attempt+1} succeeded")
+#         break
+#     except Exception as e:
+#         if "UnknownFieldException" in str(e):
+#             print(f"Schema mismatch detected — retrying...")
+#             continue
+#         raise
 
-# Your code here (μπορείτε να χρησιμοποιήσετε try/except γιατί η πρώτη εκτέλεση πιθανώς θα σπάσει):
+# Your code here:
 
 
 

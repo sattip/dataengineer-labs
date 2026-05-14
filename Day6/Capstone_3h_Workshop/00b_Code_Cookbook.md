@@ -633,19 +633,41 @@ mlflow.sklearn.log_model(sk_model=model, name="model")
 ```
 
 ### ❌ Empty MERGE σε empty table
-```sql
--- ❌ Wrong — DeltaTable δεν υπάρχει
-DeltaTable.forName(spark, "workspace.x.silver_tax")  # NoSuchTableException
 
--- ✅ Right — δημιουργήστε πρώτα empty shell
+Python — δεν δουλεύει αν το table δεν υπάρχει:
+```python
+# ❌ Wrong — DeltaTable δεν υπάρχει
+target = DeltaTable.forName(spark, "workspace.x.silver_tax")  # NoSuchTableException
+```
+
+SQL — δημιουργήστε πρώτα empty shell:
+```sql
 CREATE OR REPLACE TABLE workspace.x.silver_tax (
     statement_id STRING,
-    afm STRING,
-    ...
+    afm STRING
 ) USING DELTA;
-
--- Μετά MERGE
 ```
+
+Μετά κάνετε MERGE κανονικά.
+
+### ❌ foreachBatch με λάθος signature
+```python
+# ❌ Wrong — μόνο 1 argument
+def merge_to_silver(df):
+    ...
+
+# ✅ Right — ΠΑΝΤΑ 2 args: (microbatch_df, batch_id)
+def merge_to_silver(microbatch_df, batch_id):
+    # batch_id είναι long (incremental ανά microbatch)
+    ...
+```
+
+### ❌ Schema location collision μεταξύ streaming queries
+Κάθε `cloudFiles.schemaLocation` πρέπει να είναι **unique per stream**. Αν 2 streams μοιραστούν path:
+- Schema από το ένα stream υπερισχύει του άλλου
+- Mysterious "schema doesn't match" errors
+
+✅ Right: `{checkpoint_dir}/bronze_stream_taxis/_schema` και `{checkpoint_dir}/bronze_stream_mydata/_schema`.
 
 ### ❌ Streaming query χωρίς `awaitTermination()`
 ```python
