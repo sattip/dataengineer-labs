@@ -97,13 +97,55 @@ print(f"✅ Batch 1 written: {batch1_path}")
 # MAGIC - Trigger: `availableNow=True` (run-and-stop)
 # MAGIC - Add columns: `_ingested_at`, `_source_file`
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `spark.readStream.format("cloudFiles")`
-# MAGIC - `.option("cloudFiles.format", "csv")`
-# MAGIC - `.option("cloudFiles.schemaLocation", ...)`
-# MAGIC - `.option("header", "true")`
-# MAGIC - `.option("cloudFiles.inferColumnTypes", "true")`
-# MAGIC - `.writeStream.toTable("...").awaitTermination()`
+# MAGIC ### 📖 Worked Example (Auto Loader για JSON files)
+# MAGIC
+# MAGIC Παρόμοιο pattern, αλλά για JSON αντί για CSV:
+# MAGIC
+# MAGIC ```python
+# MAGIC src   = "/Volumes/demo/raw/events"
+# MAGIC chkpt = "/Volumes/demo/raw/checkpoints/bronze_events"
+# MAGIC
+# MAGIC (spark.readStream
+# MAGIC     .format("cloudFiles")
+# MAGIC     .option("cloudFiles.format", "json")              # ⬅️ json
+# MAGIC     .option("cloudFiles.schemaLocation", f"{chkpt}/_schema")
+# MAGIC     .option("cloudFiles.inferColumnTypes", "true")
+# MAGIC     .load(src)
+# MAGIC     .withColumn("_ingested_at", current_timestamp())
+# MAGIC     .writeStream
+# MAGIC     .format("delta")
+# MAGIC     .option("checkpointLocation", chkpt)
+# MAGIC     .trigger(availableNow=True)
+# MAGIC     .toTable("workspace.demo.bronze_events")
+# MAGIC     .awaitTermination())
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints για το exercise
+# MAGIC
+# MAGIC **Full Auto Loader pattern:**
+# MAGIC ```python
+# MAGIC chk_path = f"{checkpoint_dir}/bronze_stream"
+# MAGIC
+# MAGIC query = (spark.readStream
+# MAGIC     .format("cloudFiles")
+# MAGIC     .option("cloudFiles.format", "csv")
+# MAGIC     .option("cloudFiles.schemaLocation", f"{chk_path}/_schema")
+# MAGIC     .option("header", "true")
+# MAGIC     .option("cloudFiles.inferColumnTypes", "true")
+# MAGIC     .load(streaming_src)
+# MAGIC     .withColumn("_ingested_at", current_timestamp())
+# MAGIC     .withColumn("_source_file", col("_metadata.file_path"))
+# MAGIC     .writeStream
+# MAGIC     .format("delta")
+# MAGIC     .option("checkpointLocation", chk_path)
+# MAGIC     .option("mergeSchema", "true")
+# MAGIC     .trigger(availableNow=True)
+# MAGIC     .toTable(f"{SCHEMA}.bronze_stream_tax"))
+# MAGIC
+# MAGIC query.awaitTermination()      # ⬅️ ΑΠΑΡΑΙΤΗΤΟ
+# MAGIC ```
+# MAGIC
+# MAGIC **Σημείωση**: ίδιος `checkpointLocation` σε κάθε run = incremental. Διαφορετικό = full re-read.
 
 # COMMAND ----------
 
@@ -169,11 +211,86 @@ except Exception as e:
 # MAGIC    - MERGE INTO silver_stream_tax
 # MAGIC 3. Συνδέστε με streaming query: `.foreachBatch(merge_to_silver).trigger(availableNow=True)`
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `microbatch_df.dropDuplicates(["statement_id"])` ή window function για latest
-# MAGIC - `DeltaTable.forName(spark, table_name)` μέσα στη function
-# MAGIC - `.merge(source, "t.statement_id = s.statement_id")`
-# MAGIC - Νέο checkpoint dir: `{checkpoint_dir}/silver_merge`
+# MAGIC ### 📖 Worked Example (foreachBatch με MERGE)
+# MAGIC
+# MAGIC Streaming events → MERGE into customers table:
+# MAGIC
+# MAGIC ```python
+# MAGIC from delta.tables import DeltaTable
+# MAGIC from pyspark.sql.window import Window
+# MAGIC
+# MAGIC def update_customers(microbatch_df, batch_id):
+# MAGIC     # 1. Dedupe σε microbatch (latest event wins)
+# MAGIC     w = Window.partitionBy("customer_id").orderBy(col("event_ts").desc())
+# MAGIC     dedup = (microbatch_df
+# MAGIC         .withColumn("rn", F.row_number().over(w))
+# MAGIC         .filter("rn = 1")
+# MAGIC         .drop("rn"))
+# MAGIC
+# MAGIC     # 2. MERGE
+# MAGIC     tgt = DeltaTable.forName(microbatch_df.sparkSession, "workspace.demo.customers")
+# MAGIC     (tgt.alias("t")
+# MAGIC         .merge(dedup.alias("s"), "t.customer_id = s.customer_id")
+# MAGIC         .whenMatchedUpdateAll()
+# MAGIC         .whenNotMatchedInsertAll()
+# MAGIC         .execute())
+# MAGIC     print(f"  Batch {batch_id}: merged {dedup.count()} customers")
+# MAGIC
+# MAGIC # Stream
+# MAGIC (spark.readStream
+# MAGIC     .table("workspace.demo.bronze_events")
+# MAGIC     .writeStream
+# MAGIC     .foreachBatch(update_customers)
+# MAGIC     .option("checkpointLocation", "/Volumes/.../checkpoints/silver_merge")
+# MAGIC     .trigger(availableNow=True)
+# MAGIC     .start()
+# MAGIC     .awaitTermination())
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints για το exercise
+# MAGIC
+# MAGIC **Function signature**:
+# MAGIC ```python
+# MAGIC def merge_to_silver(microbatch_df, batch_id):
+# MAGIC     # microbatch_df: DataFrame
+# MAGIC     # batch_id: integer (incremental ανά batch)
+# MAGIC     ...
+# MAGIC ```
+# MAGIC
+# MAGIC **Dedupe pattern (latest wins):**
+# MAGIC ```python
+# MAGIC w = Window.partitionBy("statement_id").orderBy(col("_ingested_at").desc())
+# MAGIC dedup = (microbatch_df
+# MAGIC     .withColumn("_rn", row_number().over(w))
+# MAGIC     .filter("_rn = 1")
+# MAGIC     .drop("_rn")
+# MAGIC     .withColumn("_merged_at", current_timestamp()))
+# MAGIC ```
+# MAGIC
+# MAGIC **MERGE μέσα στη function:**
+# MAGIC ```python
+# MAGIC target = DeltaTable.forName(
+# MAGIC     microbatch_df.sparkSession,    # ⬅️ ΟΧΙ global spark!
+# MAGIC     f"{SCHEMA}.silver_stream_tax"
+# MAGIC )
+# MAGIC (target.alias("t")
+# MAGIC     .merge(dedup.alias("s"), "t.statement_id = s.statement_id")
+# MAGIC     .whenMatchedUpdateAll()
+# MAGIC     .whenNotMatchedInsertAll()
+# MAGIC     .execute())
+# MAGIC ```
+# MAGIC
+# MAGIC **Stream connection:**
+# MAGIC ```python
+# MAGIC (spark.readStream
+# MAGIC     .table(f"{SCHEMA}.bronze_stream_tax")           # ⬅️ read από bronze
+# MAGIC     .writeStream
+# MAGIC     .foreachBatch(merge_to_silver)
+# MAGIC     .option("checkpointLocation", f"{checkpoint_dir}/silver_merge")
+# MAGIC     .trigger(availableNow=True)
+# MAGIC     .start()
+# MAGIC     .awaitTermination())
+# MAGIC ```
 
 # COMMAND ----------
 
@@ -331,10 +448,58 @@ spark.sql(f"SELECT statement_id, tax_amount FROM {SCHEMA}.silver_stream_tax LIMI
 # MAGIC
 # MAGIC 3. **Rollback**: τρέξτε `RESTORE TABLE ... TO VERSION AS OF X` για να επιστρέψετε.
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `DESCRIBE HISTORY {SCHEMA}.silver_stream_tax` → δείτε version, operation, timestamp
-# MAGIC - `SELECT * FROM {SCHEMA}.silver_stream_tax VERSION AS OF <num>`
-# MAGIC - `RESTORE TABLE {SCHEMA}.silver_stream_tax TO VERSION AS OF <num>`
+# MAGIC ### 📖 Worked Example (Time Travel + RESTORE)
+# MAGIC
+# MAGIC ```python
+# MAGIC # 1. Δες πλήρες ιστορικό
+# MAGIC spark.sql("DESCRIBE HISTORY workspace.demo.products").show(truncate=False)
+# MAGIC # Output:
+# MAGIC #   version | timestamp           | operation
+# MAGIC #   0       | 2026-04-30 10:00    | CREATE TABLE
+# MAGIC #   1       | 2026-04-30 10:05    | WRITE
+# MAGIC #   2       | 2026-04-30 10:10    | MERGE
+# MAGIC #   3       | 2026-04-30 10:15    | UPDATE       ← το «κακό» update
+# MAGIC
+# MAGIC # 2. Verify ότι version 2 έχει σωστά data
+# MAGIC spark.sql("SELECT * FROM workspace.demo.products VERSION AS OF 2").show()
+# MAGIC
+# MAGIC # 3. Rollback σε version 2
+# MAGIC spark.sql("RESTORE TABLE workspace.demo.products TO VERSION AS OF 2")
+# MAGIC
+# MAGIC # 4. Verify ότι τώρα είμαι σε version 2 (αλλά καταγράφεται νέο version 4 για audit)
+# MAGIC spark.sql("DESCRIBE HISTORY workspace.demo.products").show()
+# MAGIC # version 4 operation = RESTORE
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints για το exercise
+# MAGIC
+# MAGIC **Find the bad version:**
+# MAGIC ```python
+# MAGIC history = spark.sql(f"DESCRIBE HISTORY {SCHEMA}.silver_stream_tax")
+# MAGIC history.select("version", "timestamp", "operation").show(truncate=False)
+# MAGIC
+# MAGIC # Programmatic: το πιο πρόσφατο update είναι το πρώτο row
+# MAGIC latest_op = history.first()
+# MAGIC bad_version = latest_op["version"]              # το UPDATE
+# MAGIC good_version = bad_version - 1                  # το προηγούμενο
+# MAGIC ```
+# MAGIC
+# MAGIC **Verify previous version:**
+# MAGIC ```python
+# MAGIC spark.sql(f\"\"\"
+# MAGIC     SELECT statement_id, tax_amount
+# MAGIC     FROM {SCHEMA}.silver_stream_tax VERSION AS OF {good_version}
+# MAGIC     LIMIT 10
+# MAGIC \"\"\").show()
+# MAGIC ```
+# MAGIC
+# MAGIC **Restore:**
+# MAGIC ```python
+# MAGIC spark.sql(f"RESTORE TABLE {SCHEMA}.silver_stream_tax TO VERSION AS OF {good_version}")
+# MAGIC ```
+# MAGIC
+# MAGIC **Σημαντικό**: το RESTORE δεν διαγράφει το «κακό» version — απλώς δημιουργεί νέο version
+# MAGIC που είναι copy του παλιού καλού. Όλο το history διατηρείται.
 
 # COMMAND ----------
 

@@ -26,8 +26,9 @@
 | File | Type | Description |
 |---|---|---|
 | `00_Reading_Material.md` | Reference | Συνοπτικός οδηγός όλων των concepts (9 sections) |
-| `01_Exercises_Foundations.py` | Notebook | 4 exercises με TODO blocks + verifications |
-| `02_Exercises_MidLevel.py` | Notebook | 4 mid-level exercises (streaming + Delta features) |
+| `00b_Code_Cookbook.md` | Reference | 15 sections copy-paste patterns για κάθε pattern |
+| `01_Exercises_Foundations.py` | Notebook | 4 exercises **με Worked Examples** + detailed hints + verifications |
+| `02_Exercises_MidLevel.py` | Notebook | 4 mid-level exercises **με Worked Examples** + detailed hints |
 | `03_Capstone_MiniProject.py` | Notebook | End-to-end ΑΑΔΕ pipeline (no hints) |
 | `04_Solutions.py` | Notebook | Όλες οι λύσεις (κρυφό για τους trainees!) |
 | `README.md` | Guide | Αυτό το αρχείο |
@@ -127,6 +128,7 @@ End-to-end pipeline: 2 sources (TAXIS + myDATA) → Silver με DQ → Gold top-
 
 ```
 https://raw.githubusercontent.com/sattip/dataengineer-labs/refs/heads/main/Day6/Capstone_3h_Workshop/00_Reading_Material.md
+https://raw.githubusercontent.com/sattip/dataengineer-labs/refs/heads/main/Day6/Capstone_3h_Workshop/00b_Code_Cookbook.md
 https://raw.githubusercontent.com/sattip/dataengineer-labs/refs/heads/main/Day6/Capstone_3h_Workshop/01_Exercises_Foundations.py
 https://raw.githubusercontent.com/sattip/dataengineer-labs/refs/heads/main/Day6/Capstone_3h_Workshop/02_Exercises_MidLevel.py
 https://raw.githubusercontent.com/sattip/dataengineer-labs/refs/heads/main/Day6/Capstone_3h_Workshop/03_Capstone_MiniProject.py

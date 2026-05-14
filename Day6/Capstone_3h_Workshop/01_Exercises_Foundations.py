@@ -103,11 +103,70 @@ print(f"   Expected issues: ~{sum(1 for x in data['afm'] if x is None)} NULL Α�
 # MAGIC - TBLPROPERTIES: `layer='bronze'`, `data_owner='aade'`, `pii_present='true'`
 # MAGIC - COMMENT: 'Bronze layer — raw tax declarations από TAXIS source'
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `spark.read.csv()` ή SQL `read_files()`
-# MAGIC - `withColumn()` για νέες στήλες
-# MAGIC - `.write.format("delta").mode("overwrite").saveAsTable()`
-# MAGIC - Ή SQL `CREATE OR REPLACE TABLE ... AS SELECT ...`
+# MAGIC ### 📖 Worked Example (παρόμοιο, πιο απλό)
+# MAGIC
+# MAGIC Δείτε πώς γράφεται ένα Bronze table από CSV με metadata + TBLPROPERTIES.
+# MAGIC Στόχος εδώ: ένας πίνακας **πελατών** (όχι tax declarations) — μιμηθείτε το pattern.
+# MAGIC
+# MAGIC ```python
+# MAGIC # Παράδειγμα: φορτώνω customers.csv → workspace.demo.bronze_customers
+# MAGIC spark.sql(f"""
+# MAGIC     CREATE OR REPLACE TABLE workspace.demo.bronze_customers
+# MAGIC     USING DELTA
+# MAGIC     COMMENT 'Bronze layer — raw customers data'
+# MAGIC     TBLPROPERTIES (
+# MAGIC         'layer' = 'bronze',
+# MAGIC         'data_owner' = 'crm_team'
+# MAGIC     )
+# MAGIC     AS
+# MAGIC     SELECT *,
+# MAGIC         current_timestamp() AS _ingested_at,
+# MAGIC         _metadata.file_path AS _source_file
+# MAGIC     FROM read_files(
+# MAGIC         '/Volumes/workspace/demo/raw/customers.csv',
+# MAGIC         format => 'csv',
+# MAGIC         header => true,
+# MAGIC         inferSchema => true
+# MAGIC     )
+# MAGIC """)
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints
+# MAGIC
+# MAGIC **Επιλογή 1 — SQL με f-string (πιο εύκολο):**
+# MAGIC ```python
+# MAGIC spark.sql(f"""
+# MAGIC     CREATE OR REPLACE TABLE {SCHEMA}.bronze_tax_declarations
+# MAGIC     USING DELTA
+# MAGIC     COMMENT '...'
+# MAGIC     TBLPROPERTIES ('layer' = 'bronze', ...)
+# MAGIC     AS SELECT *,
+# MAGIC         current_timestamp() AS _ingested_at,
+# MAGIC         _metadata.file_path AS _source_file
+# MAGIC     FROM read_files('{csv_path}', format => 'csv', header => true, inferSchema => true)
+# MAGIC """)
+# MAGIC ```
+# MAGIC
+# MAGIC **Επιλογή 2 — Python DataFrame API:**
+# MAGIC ```python
+# MAGIC df = (spark.read
+# MAGIC     .option("header", "true")
+# MAGIC     .option("inferSchema", "true")
+# MAGIC     .csv(csv_path)
+# MAGIC     .withColumn("_ingested_at", current_timestamp())
+# MAGIC     .withColumn("_source_file", col("_metadata.file_path")))
+# MAGIC
+# MAGIC (df.write.format("delta").mode("overwrite")
+# MAGIC     .option("overwriteSchema", "true")
+# MAGIC     .saveAsTable(f"{SCHEMA}.bronze_tax_declarations"))
+# MAGIC
+# MAGIC # TBLPROPERTIES μπαίνουν ξεχωριστά:
+# MAGIC spark.sql(f"""
+# MAGIC     ALTER TABLE {SCHEMA}.bronze_tax_declarations SET TBLPROPERTIES (
+# MAGIC         'layer' = 'bronze', 'data_owner' = 'aade', 'pii_present' = 'true'
+# MAGIC     )
+# MAGIC """)
+# MAGIC ```
 # MAGIC
 # MAGIC ### Expected output
 # MAGIC - 200 rows στο Bronze
@@ -161,11 +220,77 @@ except Exception as e:
 # MAGIC 2. **`{SCHEMA}.quarantine_tax`** — όλα τα invalid rows + extra column `_reason` που
 # MAGIC    εξηγεί γιατί απορρίφθηκαν.
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `.filter()` + `~` (not) για inverse
-# MAGIC - `when().otherwise()` για το `_reason` column
-# MAGIC - `to_timestamp()` για conversion
-# MAGIC - Combine πολλαπλά conditions: `& (col1) & (col2)`
+# MAGIC ### 📖 Worked Example (παρόμοιο σενάριο)
+# MAGIC
+# MAGIC Πελάτες με invalid email format → split σε valid/invalid με reason.
+# MAGIC
+# MAGIC ```python
+# MAGIC # Setup mock
+# MAGIC bronze = spark.createDataFrame([
+# MAGIC     (1, "alice@example.com",  100.0),
+# MAGIC     (2, None,                 50.0),       # NULL email
+# MAGIC     (3, "bob_invalid",        200.0),      # no @ sign
+# MAGIC     (4, "carol@example.com", -10.0),       # negative amount
+# MAGIC ], "id INT, email STRING, amount DOUBLE")
+# MAGIC
+# MAGIC # Define validation rules
+# MAGIC is_valid = (
+# MAGIC     col("email").isNotNull() &
+# MAGIC     col("email").contains("@") &
+# MAGIC     (col("amount") >= 0)
+# MAGIC )
+# MAGIC
+# MAGIC # Split
+# MAGIC valid = bronze.filter(is_valid)
+# MAGIC
+# MAGIC invalid = (bronze
+# MAGIC     .filter(~is_valid)
+# MAGIC     .withColumn("_reason",
+# MAGIC         when(col("email").isNull(),            "NULL_EMAIL")
+# MAGIC         .when(~col("email").contains("@"),     "INVALID_EMAIL_FORMAT")
+# MAGIC         .when(col("amount") < 0,               "NEGATIVE_AMOUNT")
+# MAGIC         .otherwise("UNKNOWN")))
+# MAGIC
+# MAGIC valid.show()      # 1 row: alice
+# MAGIC invalid.show()    # 3 rows με reasons
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints για ΑΑΔΕ exercise
+# MAGIC
+# MAGIC **Validation rule (όλες οι συνθήκες ταυτόχρονα):**
+# MAGIC ```python
+# MAGIC is_valid = (
+# MAGIC     col("afm").isNotNull() &
+# MAGIC     (length(col("afm")) == 9) &
+# MAGIC     (col("tax_amount") >= 0) &
+# MAGIC     (col("region") != "INVALID")
+# MAGIC )
+# MAGIC ```
+# MAGIC
+# MAGIC **Reason column (priority order — πρώτο match wins):**
+# MAGIC ```python
+# MAGIC .withColumn("_reason",
+# MAGIC     when(col("afm").isNull(),            "NULL_AFM")
+# MAGIC     .when(length(col("afm")) != 9,       "INVALID_AFM_FORMAT")
+# MAGIC     .when(col("tax_amount") < 0,         "NEGATIVE_AMOUNT")
+# MAGIC     .when(col("region") == "INVALID",    "INVALID_REGION")
+# MAGIC     .otherwise("UNKNOWN"))
+# MAGIC ```
+# MAGIC
+# MAGIC **Transformations για το silver:**
+# MAGIC ```python
+# MAGIC silver = (bronze
+# MAGIC     .filter(is_valid)
+# MAGIC     .withColumn("status", upper(trim(col("status"))))     # standardize
+# MAGIC     .withColumn("submitted_at", to_timestamp("submitted_at"))  # string → timestamp
+# MAGIC )
+# MAGIC ```
+# MAGIC
+# MAGIC **Write και τα 2 tables:**
+# MAGIC ```python
+# MAGIC silver.write.format("delta").mode("overwrite").saveAsTable(f"{SCHEMA}.silver_tax_clean")
+# MAGIC invalid.write.format("delta").mode("overwrite").saveAsTable(f"{SCHEMA}.quarantine_tax")
+# MAGIC ```
 # MAGIC
 # MAGIC ### Expected output
 # MAGIC - silver_tax_clean: ~165-175 rows (depends on overlaps μεταξύ invalid types)
@@ -247,13 +372,85 @@ incremental_df.show(truncate=False)
 # MAGIC - Inserts νέες rows
 # MAGIC - Δεν αγγίζει stale rows
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `DeltaTable.forName(spark, ...)`
-# MAGIC - `.merge(source, condition)`
-# MAGIC - `.whenMatchedUpdate(condition=..., set={...})`
-# MAGIC - `.whenNotMatchedInsertAll()`
-# MAGIC - Σε python-side: `incremental_df.alias("s")` και target `.alias("t")`
-# MAGIC - Conditions ως **strings**: `"s.submitted_at > t.submitted_at"`
+# MAGIC ### 📖 Worked Example (απλό MERGE με condition)
+# MAGIC
+# MAGIC Στοκ προϊόντων: ενημερώνω prices μόνο αν το νέο price είναι από νεότερο update.
+# MAGIC
+# MAGIC ```python
+# MAGIC from delta.tables import DeltaTable
+# MAGIC
+# MAGIC # Setup
+# MAGIC spark.sql("DROP TABLE IF EXISTS workspace.demo.products")
+# MAGIC spark.sql(\"\"\"
+# MAGIC     CREATE TABLE workspace.demo.products (
+# MAGIC         product_id STRING, price DOUBLE, updated_at TIMESTAMP
+# MAGIC     ) USING DELTA
+# MAGIC \"\"\")
+# MAGIC spark.sql(\"\"\"INSERT INTO workspace.demo.products VALUES
+# MAGIC     ('P1', 10.0, '2026-01-01'), ('P2', 20.0, '2026-01-01')
+# MAGIC \"\"\")
+# MAGIC
+# MAGIC # Incremental batch: 2 updates + 1 new + 1 stale
+# MAGIC updates = spark.createDataFrame([
+# MAGIC     ("P1", 15.0, "2026-05-01"),   # NEWER update → apply
+# MAGIC     ("P2", 5.0,  "2020-01-01"),   # STALE → skip
+# MAGIC     ("P3", 30.0, "2026-05-01"),   # NEW → insert
+# MAGIC ], "product_id STRING, price DOUBLE, updated_at STRING") \\
+# MAGIC   .withColumn("updated_at", F.to_timestamp("updated_at"))
+# MAGIC
+# MAGIC # MERGE με conditional update
+# MAGIC target = DeltaTable.forName(spark, "workspace.demo.products")
+# MAGIC (target.alias("t")
+# MAGIC     .merge(updates.alias("s"), "t.product_id = s.product_id")
+# MAGIC     .whenMatchedUpdate(
+# MAGIC         condition="s.updated_at > t.updated_at",   # ⬅️ μόνο newer
+# MAGIC         set={"price": "s.price", "updated_at": "s.updated_at"})
+# MAGIC     .whenNotMatchedInsertAll()
+# MAGIC     .execute())
+# MAGIC
+# MAGIC # Result: P1=15.0, P2=20.0 (stale skipped), P3=30.0 (inserted)
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints
+# MAGIC
+# MAGIC **Critical: το condition είναι STRING, όχι Column expression:**
+# MAGIC ```python
+# MAGIC # ✅ Right
+# MAGIC condition="s.submitted_at > t.submitted_at"
+# MAGIC
+# MAGIC # ❌ Wrong
+# MAGIC condition=col("s.submitted_at") > col("t.submitted_at")
+# MAGIC ```
+# MAGIC
+# MAGIC **`set` argument είναι dict με string expressions:**
+# MAGIC ```python
+# MAGIC set={
+# MAGIC     "tax_amount":   "s.tax_amount",        # ⬅️ string referencing source column
+# MAGIC     "status":       "s.status",
+# MAGIC     "submitted_at": "s.submitted_at",
+# MAGIC     "_updated_at":  "current_timestamp()"  # ⬅️ μπορεί να είναι expression
+# MAGIC }
+# MAGIC ```
+# MAGIC
+# MAGIC **Full pattern για το exercise:**
+# MAGIC ```python
+# MAGIC from delta.tables import DeltaTable
+# MAGIC
+# MAGIC target = DeltaTable.forName(spark, f"{SCHEMA}.silver_tax_clean")
+# MAGIC (target.alias("t")
+# MAGIC     .merge(incremental_df.alias("s"), "t.statement_id = s.statement_id")
+# MAGIC     .whenMatchedUpdate(
+# MAGIC         condition="s.submitted_at > t.submitted_at",
+# MAGIC         set={
+# MAGIC             "tax_amount":   "s.tax_amount",
+# MAGIC             "status":       "s.status",
+# MAGIC             "submitted_at": "s.submitted_at",
+# MAGIC             "region":       "s.region",
+# MAGIC             "afm":          "s.afm",
+# MAGIC         })
+# MAGIC     .whenNotMatchedInsertAll()
+# MAGIC     .execute())
+# MAGIC ```
 # MAGIC
 # MAGIC ### Expected behavior
 # MAGIC - TX00001: tax_amount γίνεται 9999.99 (update)
@@ -331,11 +528,75 @@ except Exception as e:
 # MAGIC | `is_above_region_avg` | boolean: tax_vs_region_avg > 1.0 |
 # MAGIC | `computed_at` | current_timestamp() |
 # MAGIC
-# MAGIC ### Hints
-# MAGIC - `groupBy("afm")` + aggregations
-# MAGIC - Window για region average: `Window.partitionBy("region")`
-# MAGIC - Για να βάλεις και region στο aggregation result: keep region στο first groupBy
-# MAGIC - `case when status='APPROVED' then 1 else 0 end` για counting
+# MAGIC ### 📖 Worked Example (Window + groupBy)
+# MAGIC
+# MAGIC Sales metrics per customer + αναγνώριση των top performers σε κάθε region.
+# MAGIC
+# MAGIC ```python
+# MAGIC from pyspark.sql.window import Window
+# MAGIC
+# MAGIC sales = spark.createDataFrame([
+# MAGIC     ("Alice", "Athens", 1000),
+# MAGIC     ("Alice", "Athens", 1500),
+# MAGIC     ("Bob",   "Athens", 800),
+# MAGIC     ("Carol", "Salonika", 2000),
+# MAGIC ], "customer STRING, region STRING, amount INT")
+# MAGIC
+# MAGIC # Step 1: aggregate ανά customer + region
+# MAGIC per_customer = (sales
+# MAGIC     .groupBy("customer", "region")
+# MAGIC     .agg(F.sum("amount").alias("total_sales")))
+# MAGIC
+# MAGIC # Step 2: window για region average (χωρίς orderBy = όλο το region σαν window)
+# MAGIC w = Window.partitionBy("region")
+# MAGIC enriched = (per_customer
+# MAGIC     .withColumn("region_avg", F.avg("total_sales").over(w))
+# MAGIC     .withColumn("vs_avg",     col("total_sales") / col("region_avg"))
+# MAGIC     .withColumn("is_top",     col("vs_avg") > 1.0))
+# MAGIC
+# MAGIC enriched.show()
+# MAGIC # customer | region   | total_sales | region_avg | vs_avg | is_top
+# MAGIC # Alice    | Athens   | 2500        | 1650       | 1.51   | true
+# MAGIC # Bob      | Athens   | 800         | 1650       | 0.48   | false
+# MAGIC # Carol    | Salonika | 2000        | 2000       | 1.00   | false
+# MAGIC ```
+# MAGIC
+# MAGIC ### 💡 Detailed Hints
+# MAGIC
+# MAGIC **Step 1 — Aggregate ανά ΑΦΜ (κρατώντας region για το next step):**
+# MAGIC ```python
+# MAGIC per_afm = (silver
+# MAGIC     .groupBy("afm", "region")          # ⬅️ keep region!
+# MAGIC     .agg(
+# MAGIC         count("*").alias("total_declarations"),
+# MAGIC         spark_sum("tax_amount").alias("total_tax"),
+# MAGIC         spark_sum(when(col("status") == "APPROVED", 1).otherwise(0)).alias("approved_count"),
+# MAGIC         spark_sum(when(col("status") == "REJECTED", 1).otherwise(0)).alias("rejected_count"),
+# MAGIC     )
+# MAGIC     .withColumn("rejection_rate",
+# MAGIC                 col("rejected_count") / col("total_declarations")))
+# MAGIC ```
+# MAGIC
+# MAGIC **Step 2 — Window για region average:**
+# MAGIC ```python
+# MAGIC from pyspark.sql.window import Window
+# MAGIC
+# MAGIC w = Window.partitionBy("region")
+# MAGIC gold = (per_afm
+# MAGIC     .withColumn("region_avg_tax",      avg("total_tax").over(w))
+# MAGIC     .withColumn("tax_vs_region_avg",   col("total_tax") / col("region_avg_tax"))
+# MAGIC     .withColumn("is_above_region_avg", col("tax_vs_region_avg") > 1.0)
+# MAGIC     .withColumn("computed_at",         current_timestamp()))
+# MAGIC ```
+# MAGIC
+# MAGIC **Step 3 — Save:**
+# MAGIC ```python
+# MAGIC gold.write.format("delta").mode("overwrite").saveAsTable(
+# MAGIC     f"{SCHEMA}.gold_taxpayer_metrics"
+# MAGIC )
+# MAGIC ```
+# MAGIC
+# MAGIC **Tip**: Αν δεν θες το `rejected_count` στο τελικό output, κάνε `.drop("rejected_count")` πριν το save.
 
 # COMMAND ----------
 
