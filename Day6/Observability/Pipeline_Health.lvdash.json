@@ -47,42 +47,8 @@
       ]
     },
     {
-      "name": "ds_slowest",
-      "displayName": "Top Slowest Jobs",
-      "queryLines": [
-        "SELECT ",
-        "  j.name AS job_name, ",
-        "  COUNT(*) AS runs, ",
-        "  ROUND(AVG(unix_timestamp(rt.period_end_time) - unix_timestamp(rt.period_start_time))/60.0, 2) AS avg_duration_min, ",
-        "  ROUND(MAX(unix_timestamp(rt.period_end_time) - unix_timestamp(rt.period_start_time))/60.0, 2) AS max_duration_min ",
-        "FROM system.lakeflow.job_run_timeline rt ",
-        "JOIN system.lakeflow.jobs j ON rt.job_id=j.job_id ",
-        "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
-        "AND rt.period_end_time IS NOT NULL ",
-        "GROUP BY j.name ORDER BY avg_duration_min DESC LIMIT 10"
-      ]
-    },
-    {
-      "name": "ds_failures",
-      "displayName": "Recent Failures 24h",
-      "queryLines": [
-        "SELECT ",
-        "  j.name AS job_name, ",
-        "  rt.period_start_time AS started_at, ",
-        "  ROUND((unix_timestamp(rt.period_end_time)-unix_timestamp(rt.period_start_time))/60.0, 2) AS duration_min, ",
-        "  rt.result_state AS status, ",
-        "  rt.termination_code AS error, ",
-        "  rt.run_id ",
-        "FROM system.lakeflow.job_run_timeline rt ",
-        "JOIN system.lakeflow.jobs j ON rt.job_id=j.job_id ",
-        "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 24 HOURS ",
-        "AND rt.result_state IN ('FAILED','TIMEDOUT','ERROR') ",
-        "ORDER BY rt.period_start_time DESC LIMIT 50"
-      ]
-    },
-    {
       "name": "ds_health_table",
-      "displayName": "Per-Job Health Summary",
+      "displayName": "Per-Job Health (filterable)",
       "queryLines": [
         "WITH stats AS ( ",
         "  SELECT j.job_id, j.name, j.creator_user_name, ",
@@ -96,7 +62,7 @@
         "    ON j.job_id=rt.job_id AND rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
         "  WHERE j.delete_time IS NULL ",
         "  GROUP BY j.job_id, j.name, j.creator_user_name) ",
-        "SELECT name AS job_name, creator_user_name AS owner, total_runs, successes, failures, ",
+        "SELECT job_id, name AS job_name, creator_user_name AS owner, total_runs, successes, failures, ",
         "  ROUND(100.0*successes/NULLIF(total_runs,0), 2) AS success_pct, ",
         "  last_run_at, avg_duration_min, ",
         "  CASE WHEN total_runs=0 THEN 'NO RUNS' ",
@@ -104,6 +70,47 @@
         "       WHEN failures > 0 THEN 'WATCH' ",
         "       ELSE 'HEALTHY' END AS health ",
         "FROM stats ORDER BY failures DESC, total_runs DESC"
+      ]
+    },
+    {
+      "name": "ds_all_runs",
+      "displayName": "All Recent Runs (filterable by job)",
+      "queryLines": [
+        "SELECT ",
+        "  j.name AS job_name, ",
+        "  rt.job_id, ",
+        "  rt.run_id, ",
+        "  rt.period_start_time AS started_at, ",
+        "  ROUND(rt.run_duration_seconds/60.0, 2) AS duration_min, ",
+        "  rt.result_state AS status, ",
+        "  rt.termination_code AS error_code, ",
+        "  rt.trigger_type, ",
+        "  CONCAT('https://', current_metastore(), '/?#job/', rt.job_id, '/run/', rt.run_id) AS run_url ",
+        "FROM system.lakeflow.job_run_timeline rt ",
+        "JOIN system.lakeflow.jobs j ON rt.job_id=j.job_id ",
+        "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "AND rt.period_end_time IS NOT NULL ",
+        "ORDER BY rt.period_start_time DESC LIMIT 500"
+      ]
+    },
+    {
+      "name": "ds_task_drill",
+      "displayName": "Task-level Drill-Down (filterable by job)",
+      "queryLines": [
+        "SELECT ",
+        "  j.name AS job_name, ",
+        "  tr.run_id, ",
+        "  tr.task_key, ",
+        "  tr.period_start_time AS started_at, ",
+        "  ROUND(tr.run_duration_seconds/60.0, 2) AS duration_min, ",
+        "  tr.result_state AS status, ",
+        "  tr.termination_code AS error_code, ",
+        "  tr.attempt_number ",
+        "FROM system.lakeflow.job_task_run_timeline tr ",
+        "JOIN system.lakeflow.jobs j ON tr.job_id=j.job_id ",
+        "WHERE tr.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "AND tr.period_end_time IS NOT NULL ",
+        "ORDER BY tr.period_start_time DESC LIMIT 500"
       ]
     },
     {
@@ -130,6 +137,36 @@
       "layout": [
         {
           "widget": {
+            "name": "filter_job_name",
+            "queries": [
+              {
+                "name": "filter_query",
+                "query": {
+                  "datasetName": "ds_all_runs",
+                  "fields": [{"name": "job_name", "expression": "`job_name`"}],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "job_name",
+                    "displayName": "Job",
+                    "queryName": "filter_query"
+                  }
+                ]
+              },
+              "frame": {"showTitle": true, "title": "🎯 Select Job to Drill-Down (φιλτράρει όλους τους πίνακες παρακάτω)"}
+            }
+          },
+          "position": {"x": 0, "y": 0, "width": 6, "height": 1}
+        },
+        {
+          "widget": {
             "name": "w_active_jobs",
             "queries": [{
               "name": "main_query",
@@ -145,7 +182,7 @@
               "frame": {"showTitle": true, "title": "Active Jobs"}
             }
           },
-          "position": {"x": 0, "y": 0, "width": 2, "height": 3}
+          "position": {"x": 0, "y": 1, "width": 2, "height": 3}
         },
         {
           "widget": {
@@ -164,7 +201,7 @@
               "frame": {"showTitle": true, "title": "Total Runs (7 days)"}
             }
           },
-          "position": {"x": 2, "y": 0, "width": 2, "height": 3}
+          "position": {"x": 2, "y": 1, "width": 2, "height": 3}
         },
         {
           "widget": {
@@ -183,26 +220,7 @@
               "frame": {"showTitle": true, "title": "Success Rate (7d)"}
             }
           },
-          "position": {"x": 4, "y": 0, "width": 2, "height": 3}
-        },
-        {
-          "widget": {
-            "name": "w_failed",
-            "queries": [{
-              "name": "main_query",
-              "query": {
-                "datasetName": "ds_success_rate",
-                "fields": [{"name": "failed", "expression": "`failed`"}],
-                "disaggregated": true
-              }
-            }],
-            "spec": {
-              "version": 2, "widgetType": "counter",
-              "encodings": {"value": {"fieldName": "failed", "displayName": "Failed"}},
-              "frame": {"showTitle": true, "title": "Failed Runs (7d)"}
-            }
-          },
-          "position": {"x": 0, "y": 3, "width": 2, "height": 3}
+          "position": {"x": 4, "y": 1, "width": 2, "height": 3}
         },
         {
           "widget": {
@@ -233,71 +251,7 @@
               "frame": {"showTitle": true, "title": "Daily Run Trend (30 days)"}
             }
           },
-          "position": {"x": 2, "y": 3, "width": 4, "height": 6}
-        },
-        {
-          "widget": {
-            "name": "w_slowest",
-            "queries": [{
-              "name": "main_query",
-              "query": {
-                "datasetName": "ds_slowest",
-                "fields": [
-                  {"name": "job_name", "expression": "`job_name`"},
-                  {"name": "runs", "expression": "`runs`"},
-                  {"name": "avg_duration_min", "expression": "`avg_duration_min`"},
-                  {"name": "max_duration_min", "expression": "`max_duration_min`"}
-                ],
-                "disaggregated": true
-              }
-            }],
-            "spec": {
-              "version": 1, "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {"fieldName": "job_name",         "displayName": "Job", "type": "string"},
-                  {"fieldName": "runs",             "displayName": "Runs", "type": "integer"},
-                  {"fieldName": "avg_duration_min", "displayName": "Avg (min)", "type": "float"},
-                  {"fieldName": "max_duration_min", "displayName": "Max (min)", "type": "float"}
-                ]
-              },
-              "frame": {"showTitle": true, "title": "Top 10 Slowest Jobs (7d)"}
-            }
-          },
-          "position": {"x": 0, "y": 9, "width": 3, "height": 7}
-        },
-        {
-          "widget": {
-            "name": "w_failures",
-            "queries": [{
-              "name": "main_query",
-              "query": {
-                "datasetName": "ds_failures",
-                "fields": [
-                  {"name": "job_name", "expression": "`job_name`"},
-                  {"name": "started_at", "expression": "`started_at`"},
-                  {"name": "duration_min", "expression": "`duration_min`"},
-                  {"name": "status", "expression": "`status`"},
-                  {"name": "error", "expression": "`error`"}
-                ],
-                "disaggregated": true
-              }
-            }],
-            "spec": {
-              "version": 1, "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {"fieldName": "job_name",     "displayName": "Job", "type": "string"},
-                  {"fieldName": "started_at",   "displayName": "Started", "type": "datetime"},
-                  {"fieldName": "duration_min", "displayName": "Min", "type": "float"},
-                  {"fieldName": "status",       "displayName": "Status", "type": "string"},
-                  {"fieldName": "error",        "displayName": "Error", "type": "string"}
-                ]
-              },
-              "frame": {"showTitle": true, "title": "Recent Failures (24h)"}
-            }
-          },
-          "position": {"x": 3, "y": 9, "width": 3, "height": 7}
+          "position": {"x": 0, "y": 4, "width": 6, "height": 6}
         },
         {
           "widget": {
@@ -335,10 +289,86 @@
                   {"fieldName": "last_run_at",      "displayName": "Last Run", "type": "datetime"}
                 ]
               },
-              "frame": {"showTitle": true, "title": "🎯 Per-Job Health (Drill-down — click row για run details)"}
+              "frame": {"showTitle": true, "title": "🎯 Per-Job Health Summary (όλα τα jobs)"}
             }
           },
-          "position": {"x": 0, "y": 16, "width": 6, "height": 9}
+          "position": {"x": 0, "y": 10, "width": 6, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "w_all_runs",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_all_runs",
+                "fields": [
+                  {"name": "started_at", "expression": "`started_at`"},
+                  {"name": "job_name", "expression": "`job_name`"},
+                  {"name": "run_id", "expression": "`run_id`"},
+                  {"name": "duration_min", "expression": "`duration_min`"},
+                  {"name": "status", "expression": "`status`"},
+                  {"name": "error_code", "expression": "`error_code`"},
+                  {"name": "trigger_type", "expression": "`trigger_type`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 1, "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "started_at",   "displayName": "Started", "type": "datetime"},
+                  {"fieldName": "job_name",     "displayName": "Job", "type": "string"},
+                  {"fieldName": "run_id",       "displayName": "Run ID", "type": "string"},
+                  {"fieldName": "status",       "displayName": "Status", "type": "string"},
+                  {"fieldName": "duration_min", "displayName": "Min", "type": "float"},
+                  {"fieldName": "error_code",   "displayName": "Error", "type": "string"},
+                  {"fieldName": "trigger_type", "displayName": "Trigger", "type": "string"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "📋 Run History (φιλτράρεται από Select Job πάνω) — click row για details"}
+            }
+          },
+          "position": {"x": 0, "y": 17, "width": 6, "height": 8}
+        },
+        {
+          "widget": {
+            "name": "w_task_drill",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_task_drill",
+                "fields": [
+                  {"name": "started_at", "expression": "`started_at`"},
+                  {"name": "job_name", "expression": "`job_name`"},
+                  {"name": "run_id", "expression": "`run_id`"},
+                  {"name": "task_key", "expression": "`task_key`"},
+                  {"name": "duration_min", "expression": "`duration_min`"},
+                  {"name": "status", "expression": "`status`"},
+                  {"name": "error_code", "expression": "`error_code`"},
+                  {"name": "attempt_number", "expression": "`attempt_number`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 1, "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "started_at",     "displayName": "Started", "type": "datetime"},
+                  {"fieldName": "job_name",       "displayName": "Job", "type": "string"},
+                  {"fieldName": "task_key",       "displayName": "Task", "type": "string"},
+                  {"fieldName": "run_id",         "displayName": "Run ID", "type": "string"},
+                  {"fieldName": "status",         "displayName": "Status", "type": "string"},
+                  {"fieldName": "duration_min",   "displayName": "Min", "type": "float"},
+                  {"fieldName": "error_code",     "displayName": "Error", "type": "string"},
+                  {"fieldName": "attempt_number", "displayName": "Attempt", "type": "integer"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "🔬 Task-level Drill-Down (per-task duration + status, φιλτράρεται από Select Job)"}
+            }
+          },
+          "position": {"x": 0, "y": 25, "width": 6, "height": 10}
         },
         {
           "widget": {
@@ -368,10 +398,10 @@
                   {"fieldName": "last_update_at",   "displayName": "Last Update", "type": "datetime"}
                 ]
               },
-              "frame": {"showTitle": true, "title": "DLT Pipelines Health (7d)"}
+              "frame": {"showTitle": true, "title": "🌊 DLT Pipelines Health (7d)"}
             }
           },
-          "position": {"x": 0, "y": 25, "width": 6, "height": 6}
+          "position": {"x": 0, "y": 35, "width": 6, "height": 6}
         }
       ]
     }
