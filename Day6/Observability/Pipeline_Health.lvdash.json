@@ -4,14 +4,14 @@
       "name": "ds_active_jobs",
       "displayName": "Active Jobs",
       "queryLines": [
-        "SELECT COUNT(*) AS active_jobs FROM system.workflow.jobs WHERE delete_time IS NULL"
+        "SELECT COUNT(*) AS active_jobs FROM system.lakeflow.jobs WHERE delete_time IS NULL"
       ]
     },
     {
       "name": "ds_runs_7d",
       "displayName": "Total Runs 7d",
       "queryLines": [
-        "SELECT COUNT(*) AS total_runs FROM system.workflow.job_run_timeline ",
+        "SELECT COUNT(*) AS total_runs FROM system.lakeflow.job_run_timeline ",
         "WHERE period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
         "AND period_end_time IS NOT NULL"
       ]
@@ -25,7 +25,7 @@
         "  SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END) AS successful, ",
         "  SUM(CASE WHEN result_state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
         "  ROUND(100.0*SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0), 2) AS success_rate_pct ",
-        "FROM system.workflow.job_run_timeline ",
+        "FROM system.lakeflow.job_run_timeline ",
         "WHERE period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
         "AND period_end_time IS NOT NULL"
       ]
@@ -40,7 +40,7 @@
         "  SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END) AS succeeded, ",
         "  SUM(CASE WHEN result_state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
         "  ROUND(100.0*SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0), 2) AS success_rate_pct ",
-        "FROM system.workflow.job_run_timeline ",
+        "FROM system.lakeflow.job_run_timeline ",
         "WHERE period_start_time >= current_timestamp() - INTERVAL 30 DAYS ",
         "AND period_end_time IS NOT NULL ",
         "GROUP BY date(period_start_time) ORDER BY run_date"
@@ -55,8 +55,8 @@
         "  COUNT(*) AS runs, ",
         "  ROUND(AVG(unix_timestamp(rt.period_end_time) - unix_timestamp(rt.period_start_time))/60.0, 2) AS avg_duration_min, ",
         "  ROUND(MAX(unix_timestamp(rt.period_end_time) - unix_timestamp(rt.period_start_time))/60.0, 2) AS max_duration_min ",
-        "FROM system.workflow.job_run_timeline rt ",
-        "JOIN system.workflow.jobs j ON rt.job_id=j.job_id ",
+        "FROM system.lakeflow.job_run_timeline rt ",
+        "JOIN system.lakeflow.jobs j ON rt.job_id=j.job_id ",
         "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
         "AND rt.period_end_time IS NOT NULL ",
         "GROUP BY j.name ORDER BY avg_duration_min DESC LIMIT 10"
@@ -73,8 +73,8 @@
         "  rt.result_state AS status, ",
         "  rt.termination_code AS error, ",
         "  rt.run_id ",
-        "FROM system.workflow.job_run_timeline rt ",
-        "JOIN system.workflow.jobs j ON rt.job_id=j.job_id ",
+        "FROM system.lakeflow.job_run_timeline rt ",
+        "JOIN system.lakeflow.jobs j ON rt.job_id=j.job_id ",
         "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 24 HOURS ",
         "AND rt.result_state IN ('FAILED','TIMEDOUT','ERROR') ",
         "ORDER BY rt.period_start_time DESC LIMIT 50"
@@ -85,18 +85,18 @@
       "displayName": "Per-Job Health Summary",
       "queryLines": [
         "WITH stats AS ( ",
-        "  SELECT j.job_id, j.name, j.creator, ",
+        "  SELECT j.job_id, j.name, j.creator_user_name, ",
         "    COUNT(rt.run_id) AS total_runs, ",
         "    SUM(CASE WHEN rt.result_state='SUCCEEDED' THEN 1 ELSE 0 END) AS successes, ",
         "    SUM(CASE WHEN rt.result_state='FAILED' THEN 1 ELSE 0 END) AS failures, ",
         "    MAX(rt.period_start_time) AS last_run_at, ",
-        "    ROUND(AVG(unix_timestamp(rt.period_end_time)-unix_timestamp(rt.period_start_time))/60.0, 2) AS avg_duration_min ",
-        "  FROM system.workflow.jobs j ",
-        "  LEFT JOIN system.workflow.job_run_timeline rt ",
+        "    ROUND(AVG(rt.run_duration_seconds)/60.0, 2) AS avg_duration_min ",
+        "  FROM system.lakeflow.jobs j ",
+        "  LEFT JOIN system.lakeflow.job_run_timeline rt ",
         "    ON j.job_id=rt.job_id AND rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
         "  WHERE j.delete_time IS NULL ",
-        "  GROUP BY j.job_id, j.name, j.creator) ",
-        "SELECT name AS job_name, creator AS owner, total_runs, successes, failures, ",
+        "  GROUP BY j.job_id, j.name, j.creator_user_name) ",
+        "SELECT name AS job_name, creator_user_name AS owner, total_runs, successes, failures, ",
         "  ROUND(100.0*successes/NULLIF(total_runs,0), 2) AS success_pct, ",
         "  last_run_at, avg_duration_min, ",
         "  CASE WHEN total_runs=0 THEN 'NO RUNS' ",
@@ -112,12 +112,12 @@
       "queryLines": [
         "SELECT p.name AS pipeline_name, ",
         "  COUNT(pr.update_id) AS total_updates_7d, ",
-        "  SUM(CASE WHEN pr.state='COMPLETED' THEN 1 ELSE 0 END) AS succeeded, ",
-        "  SUM(CASE WHEN pr.state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
-        "  MAX(pr.update_start_time) AS last_update_at ",
+        "  SUM(CASE WHEN pr.result_state='COMPLETED' THEN 1 ELSE 0 END) AS succeeded, ",
+        "  SUM(CASE WHEN pr.result_state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
+        "  MAX(pr.period_start_time) AS last_update_at ",
         "FROM system.lakeflow.pipelines p ",
-        "LEFT JOIN system.lakeflow.pipeline_runs pr ON p.pipeline_id=pr.pipeline_id ",
-        "  AND pr.update_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "LEFT JOIN system.lakeflow.pipeline_update_timeline pr ON p.pipeline_id=pr.pipeline_id ",
+        "  AND pr.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
         "WHERE p.deleted_time IS NULL ",
         "GROUP BY p.pipeline_id, p.name ORDER BY failed DESC, total_updates_7d DESC"
       ]
