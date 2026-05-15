@@ -1,0 +1,379 @@
+{
+  "datasets": [
+    {
+      "name": "ds_active_jobs",
+      "displayName": "Active Jobs",
+      "queryLines": [
+        "SELECT COUNT(*) AS active_jobs FROM system.workflow.jobs WHERE delete_time IS NULL"
+      ]
+    },
+    {
+      "name": "ds_runs_7d",
+      "displayName": "Total Runs 7d",
+      "queryLines": [
+        "SELECT COUNT(*) AS total_runs FROM system.workflow.job_run_timeline ",
+        "WHERE period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "AND period_end_time IS NOT NULL"
+      ]
+    },
+    {
+      "name": "ds_success_rate",
+      "displayName": "Success Rate KPIs",
+      "queryLines": [
+        "SELECT ",
+        "  COUNT(*) AS total_runs, ",
+        "  SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END) AS successful, ",
+        "  SUM(CASE WHEN result_state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
+        "  ROUND(100.0*SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0), 2) AS success_rate_pct ",
+        "FROM system.workflow.job_run_timeline ",
+        "WHERE period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "AND period_end_time IS NOT NULL"
+      ]
+    },
+    {
+      "name": "ds_daily_trend",
+      "displayName": "Daily Success Trend",
+      "queryLines": [
+        "SELECT ",
+        "  date(period_start_time) AS run_date, ",
+        "  COUNT(*) AS total_runs, ",
+        "  SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END) AS succeeded, ",
+        "  SUM(CASE WHEN result_state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
+        "  ROUND(100.0*SUM(CASE WHEN result_state='SUCCEEDED' THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0), 2) AS success_rate_pct ",
+        "FROM system.workflow.job_run_timeline ",
+        "WHERE period_start_time >= current_timestamp() - INTERVAL 30 DAYS ",
+        "AND period_end_time IS NOT NULL ",
+        "GROUP BY date(period_start_time) ORDER BY run_date"
+      ]
+    },
+    {
+      "name": "ds_slowest",
+      "displayName": "Top Slowest Jobs",
+      "queryLines": [
+        "SELECT ",
+        "  j.name AS job_name, ",
+        "  COUNT(*) AS runs, ",
+        "  ROUND(AVG(unix_timestamp(rt.period_end_time) - unix_timestamp(rt.period_start_time))/60.0, 2) AS avg_duration_min, ",
+        "  ROUND(MAX(unix_timestamp(rt.period_end_time) - unix_timestamp(rt.period_start_time))/60.0, 2) AS max_duration_min ",
+        "FROM system.workflow.job_run_timeline rt ",
+        "JOIN system.workflow.jobs j ON rt.job_id=j.job_id ",
+        "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "AND rt.period_end_time IS NOT NULL ",
+        "GROUP BY j.name ORDER BY avg_duration_min DESC LIMIT 10"
+      ]
+    },
+    {
+      "name": "ds_failures",
+      "displayName": "Recent Failures 24h",
+      "queryLines": [
+        "SELECT ",
+        "  j.name AS job_name, ",
+        "  rt.period_start_time AS started_at, ",
+        "  ROUND((unix_timestamp(rt.period_end_time)-unix_timestamp(rt.period_start_time))/60.0, 2) AS duration_min, ",
+        "  rt.result_state AS status, ",
+        "  rt.termination_code AS error, ",
+        "  rt.run_id ",
+        "FROM system.workflow.job_run_timeline rt ",
+        "JOIN system.workflow.jobs j ON rt.job_id=j.job_id ",
+        "WHERE rt.period_start_time >= current_timestamp() - INTERVAL 24 HOURS ",
+        "AND rt.result_state IN ('FAILED','TIMEDOUT','ERROR') ",
+        "ORDER BY rt.period_start_time DESC LIMIT 50"
+      ]
+    },
+    {
+      "name": "ds_health_table",
+      "displayName": "Per-Job Health Summary",
+      "queryLines": [
+        "WITH stats AS ( ",
+        "  SELECT j.job_id, j.name, j.creator, ",
+        "    COUNT(rt.run_id) AS total_runs, ",
+        "    SUM(CASE WHEN rt.result_state='SUCCEEDED' THEN 1 ELSE 0 END) AS successes, ",
+        "    SUM(CASE WHEN rt.result_state='FAILED' THEN 1 ELSE 0 END) AS failures, ",
+        "    MAX(rt.period_start_time) AS last_run_at, ",
+        "    ROUND(AVG(unix_timestamp(rt.period_end_time)-unix_timestamp(rt.period_start_time))/60.0, 2) AS avg_duration_min ",
+        "  FROM system.workflow.jobs j ",
+        "  LEFT JOIN system.workflow.job_run_timeline rt ",
+        "    ON j.job_id=rt.job_id AND rt.period_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "  WHERE j.delete_time IS NULL ",
+        "  GROUP BY j.job_id, j.name, j.creator) ",
+        "SELECT name AS job_name, creator AS owner, total_runs, successes, failures, ",
+        "  ROUND(100.0*successes/NULLIF(total_runs,0), 2) AS success_pct, ",
+        "  last_run_at, avg_duration_min, ",
+        "  CASE WHEN total_runs=0 THEN 'NO RUNS' ",
+        "       WHEN failures/NULLIF(total_runs,0) > 0.2 THEN 'DEGRADED' ",
+        "       WHEN failures > 0 THEN 'WATCH' ",
+        "       ELSE 'HEALTHY' END AS health ",
+        "FROM stats ORDER BY failures DESC, total_runs DESC"
+      ]
+    },
+    {
+      "name": "ds_dlt_health",
+      "displayName": "DLT Pipelines Health",
+      "queryLines": [
+        "SELECT p.name AS pipeline_name, ",
+        "  COUNT(pr.update_id) AS total_updates_7d, ",
+        "  SUM(CASE WHEN pr.state='COMPLETED' THEN 1 ELSE 0 END) AS succeeded, ",
+        "  SUM(CASE WHEN pr.state='FAILED' THEN 1 ELSE 0 END) AS failed, ",
+        "  MAX(pr.update_start_time) AS last_update_at ",
+        "FROM system.lakeflow.pipelines p ",
+        "LEFT JOIN system.lakeflow.pipeline_runs pr ON p.pipeline_id=pr.pipeline_id ",
+        "  AND pr.update_start_time >= current_timestamp() - INTERVAL 7 DAYS ",
+        "WHERE p.deleted_time IS NULL ",
+        "GROUP BY p.pipeline_id, p.name ORDER BY failed DESC, total_updates_7d DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_main",
+      "displayName": "Pipeline & Job Health",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_active_jobs",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_active_jobs",
+                "fields": [{"name": "active_jobs", "expression": "`active_jobs`"}],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 2, "widgetType": "counter",
+              "encodings": {"value": {"fieldName": "active_jobs", "displayName": "Active Jobs"}},
+              "frame": {"showTitle": true, "title": "Active Jobs"}
+            }
+          },
+          "position": {"x": 0, "y": 0, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "w_total_runs",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_runs_7d",
+                "fields": [{"name": "total_runs", "expression": "`total_runs`"}],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 2, "widgetType": "counter",
+              "encodings": {"value": {"fieldName": "total_runs", "displayName": "Runs (7d)"}},
+              "frame": {"showTitle": true, "title": "Total Runs (7 days)"}
+            }
+          },
+          "position": {"x": 2, "y": 0, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "w_success_pct",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_success_rate",
+                "fields": [{"name": "success_rate_pct", "expression": "`success_rate_pct`"}],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 2, "widgetType": "counter",
+              "encodings": {"value": {"fieldName": "success_rate_pct", "displayName": "Success %"}},
+              "frame": {"showTitle": true, "title": "Success Rate (7d)"}
+            }
+          },
+          "position": {"x": 4, "y": 0, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "w_failed",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_success_rate",
+                "fields": [{"name": "failed", "expression": "`failed`"}],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 2, "widgetType": "counter",
+              "encodings": {"value": {"fieldName": "failed", "displayName": "Failed"}},
+              "frame": {"showTitle": true, "title": "Failed Runs (7d)"}
+            }
+          },
+          "position": {"x": 0, "y": 3, "width": 2, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "w_daily_trend",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_daily_trend",
+                "fields": [
+                  {"name": "run_date", "expression": "`run_date`"},
+                  {"name": "succeeded", "expression": "`succeeded`"},
+                  {"name": "failed", "expression": "`failed`"},
+                  {"name": "success_rate_pct", "expression": "`success_rate_pct`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 3, "widgetType": "combo",
+              "encodings": {
+                "x": {"fieldName": "run_date", "scale": {"type": "temporal"}, "displayName": "Date"},
+                "y": [
+                  {"fieldName": "succeeded", "displayName": "Succeeded", "chartType": "bar"},
+                  {"fieldName": "failed",    "displayName": "Failed",    "chartType": "bar"},
+                  {"fieldName": "success_rate_pct", "displayName": "Success %", "chartType": "line", "axis": {"side": "right"}}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Daily Run Trend (30 days)"}
+            }
+          },
+          "position": {"x": 2, "y": 3, "width": 4, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "w_slowest",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_slowest",
+                "fields": [
+                  {"name": "job_name", "expression": "`job_name`"},
+                  {"name": "runs", "expression": "`runs`"},
+                  {"name": "avg_duration_min", "expression": "`avg_duration_min`"},
+                  {"name": "max_duration_min", "expression": "`max_duration_min`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 1, "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "job_name",         "displayName": "Job", "type": "string"},
+                  {"fieldName": "runs",             "displayName": "Runs", "type": "integer"},
+                  {"fieldName": "avg_duration_min", "displayName": "Avg (min)", "type": "float"},
+                  {"fieldName": "max_duration_min", "displayName": "Max (min)", "type": "float"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Top 10 Slowest Jobs (7d)"}
+            }
+          },
+          "position": {"x": 0, "y": 9, "width": 3, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "w_failures",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_failures",
+                "fields": [
+                  {"name": "job_name", "expression": "`job_name`"},
+                  {"name": "started_at", "expression": "`started_at`"},
+                  {"name": "duration_min", "expression": "`duration_min`"},
+                  {"name": "status", "expression": "`status`"},
+                  {"name": "error", "expression": "`error`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 1, "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "job_name",     "displayName": "Job", "type": "string"},
+                  {"fieldName": "started_at",   "displayName": "Started", "type": "datetime"},
+                  {"fieldName": "duration_min", "displayName": "Min", "type": "float"},
+                  {"fieldName": "status",       "displayName": "Status", "type": "string"},
+                  {"fieldName": "error",        "displayName": "Error", "type": "string"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "Recent Failures (24h)"}
+            }
+          },
+          "position": {"x": 3, "y": 9, "width": 3, "height": 7}
+        },
+        {
+          "widget": {
+            "name": "w_health_table",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_health_table",
+                "fields": [
+                  {"name": "job_name", "expression": "`job_name`"},
+                  {"name": "owner", "expression": "`owner`"},
+                  {"name": "total_runs", "expression": "`total_runs`"},
+                  {"name": "successes", "expression": "`successes`"},
+                  {"name": "failures", "expression": "`failures`"},
+                  {"name": "success_pct", "expression": "`success_pct`"},
+                  {"name": "last_run_at", "expression": "`last_run_at`"},
+                  {"name": "avg_duration_min", "expression": "`avg_duration_min`"},
+                  {"name": "health", "expression": "`health`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 1, "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "health",           "displayName": "Status", "type": "string"},
+                  {"fieldName": "job_name",         "displayName": "Job", "type": "string"},
+                  {"fieldName": "owner",            "displayName": "Owner", "type": "string"},
+                  {"fieldName": "total_runs",       "displayName": "Runs (7d)", "type": "integer"},
+                  {"fieldName": "successes",        "displayName": "OK", "type": "integer"},
+                  {"fieldName": "failures",         "displayName": "Fail", "type": "integer"},
+                  {"fieldName": "success_pct",      "displayName": "Success %", "type": "float"},
+                  {"fieldName": "avg_duration_min", "displayName": "Avg (min)", "type": "float"},
+                  {"fieldName": "last_run_at",      "displayName": "Last Run", "type": "datetime"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "🎯 Per-Job Health (Drill-down — click row για run details)"}
+            }
+          },
+          "position": {"x": 0, "y": 16, "width": 6, "height": 9}
+        },
+        {
+          "widget": {
+            "name": "w_dlt_health",
+            "queries": [{
+              "name": "main_query",
+              "query": {
+                "datasetName": "ds_dlt_health",
+                "fields": [
+                  {"name": "pipeline_name", "expression": "`pipeline_name`"},
+                  {"name": "total_updates_7d", "expression": "`total_updates_7d`"},
+                  {"name": "succeeded", "expression": "`succeeded`"},
+                  {"name": "failed", "expression": "`failed`"},
+                  {"name": "last_update_at", "expression": "`last_update_at`"}
+                ],
+                "disaggregated": true
+              }
+            }],
+            "spec": {
+              "version": 1, "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {"fieldName": "pipeline_name",    "displayName": "Pipeline", "type": "string"},
+                  {"fieldName": "total_updates_7d", "displayName": "Updates", "type": "integer"},
+                  {"fieldName": "succeeded",        "displayName": "OK", "type": "integer"},
+                  {"fieldName": "failed",           "displayName": "Fail", "type": "integer"},
+                  {"fieldName": "last_update_at",   "displayName": "Last Update", "type": "datetime"}
+                ]
+              },
+              "frame": {"showTitle": true, "title": "DLT Pipelines Health (7d)"}
+            }
+          },
+          "position": {"x": 0, "y": 25, "width": 6, "height": 6}
+        }
+      ]
+    }
+  ]
+}
