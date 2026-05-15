@@ -78,12 +78,13 @@ logging.getLogger("pyspark.sql.connect.client.core").setLevel(logging.CRITICAL)
 logging.getLogger("py4j").setLevel(logging.CRITICAL)
 logging.getLogger("grpc").setLevel(logging.CRITICAL)
 
-# Unity Catalog setup (idempotent)
-spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
-spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade.aade_data")
+# Unity Catalog setup (idempotent) — ξεχωριστό schema από το DLT pipeline
+# γιατί το DLT κλειδώνει write access σε streaming tables με ίδιο όνομα.
+spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade_stream")
+spark.sql("CREATE VOLUME IF NOT EXISTS workspace.aade_stream.aade_data")
 
 # Καθαρίζουμε προηγούμενα streaming checkpoints για clean rerun
-volume_root = "/Volumes/workspace/aade/aade_data"
+volume_root = "/Volumes/workspace/aade_stream/aade_data"
 streaming_root = f"{volume_root}/streaming"
 os.makedirs(streaming_root, exist_ok=True)
 
@@ -93,7 +94,7 @@ for src in sources:
     os.makedirs(f"{streaming_root}/raw/{src}", exist_ok=True)
     os.makedirs(f"{streaming_root}/checkpoints/{src}", exist_ok=True)
 
-print(f"✓ Schema workspace.aade & Volume έτοιμα")
+print(f"✓ Schema workspace.aade_stream & Volume έτοιμα")
 print(f"✓ Streaming root: {streaming_root}")
 print(f"✓ Sources: {', '.join(sources)}")
 
@@ -257,10 +258,10 @@ def bronze_stream(source_name, target_table):
 print("=== Starting 4 Bronze streaming queries (trigger=availableNow) ===\n")
 
 queries = []
-queries.append(bronze_stream("taxis",  "workspace.aade.bronze_taxis"))
-queries.append(bronze_stream("mydata", "workspace.aade.bronze_mydata"))
-queries.append(bronze_stream("kep",    "workspace.aade.bronze_kep"))
-queries.append(bronze_stream("efka",   "workspace.aade.bronze_efka"))
+queries.append(bronze_stream("taxis",  "workspace.aade_stream.bronze_taxis"))
+queries.append(bronze_stream("mydata", "workspace.aade_stream.bronze_mydata"))
+queries.append(bronze_stream("kep",    "workspace.aade_stream.bronze_kep"))
+queries.append(bronze_stream("efka",   "workspace.aade_stream.bronze_efka"))
 
 # Wait για ολοκλήρωση όλων των streaming queries
 for q in queries:
@@ -269,7 +270,7 @@ for q in queries:
 print("\n✓ Όλα τα Bronze streams ολοκληρώθηκαν")
 print("\n=== Bronze row counts ===")
 for src in sources:
-    cnt = spark.table(f"workspace.aade.bronze_{src}").count()
+    cnt = spark.table(f"workspace.aade_stream.bronze_{src}").count()
     print(f"  bronze_{src:8s}: {cnt:5d} rows")
 
 # COMMAND ----------
@@ -323,7 +324,7 @@ def log_dq(source, rule, failed_count, total_count):
 
 # COMMAND ----------
 
-bronze_taxis = spark.table("workspace.aade.bronze_taxis")
+bronze_taxis = spark.table("workspace.aade_stream.bronze_taxis")
 total_taxis = bronze_taxis.count()
 
 # Quality checks (track only — not drop yet)
@@ -348,7 +349,7 @@ silver_taxis = (bronze_taxis
     .dropDuplicates(["statement_id"])
 )
 
-target_table = "workspace.aade.silver_tax_declarations_clean"
+target_table = "workspace.aade_stream.silver_tax_declarations_clean"
 
 # MERGE pattern: upsert by statement_id
 if spark.catalog.tableExists(target_table):
@@ -372,7 +373,7 @@ print(f"\n  Quality drops: {fail_null_afm} null AFMs, {fail_invalid_afm_format} 
 
 # COMMAND ----------
 
-bronze_mydata = spark.table("workspace.aade.bronze_mydata")
+bronze_mydata = spark.table("workspace.aade_stream.bronze_mydata")
 total_mydata = bronze_mydata.count()
 
 # Quality
@@ -393,7 +394,7 @@ silver_mydata = (bronze_mydata
     .dropDuplicates(["invoice_id"])
 )
 
-target = "workspace.aade.silver_invoices_clean"
+target = "workspace.aade_stream.silver_invoices_clean"
 if spark.catalog.tableExists(target):
     delta = DeltaTable.forName(spark, target)
     (delta.alias("t")
@@ -415,7 +416,7 @@ print(f"  Quality issues: {fail_total_mismatch} total-amount mismatches, {fail_n
 
 # COMMAND ----------
 
-bronze_kep = spark.table("workspace.aade.bronze_kep")
+bronze_kep = spark.table("workspace.aade_stream.bronze_kep")
 total_kep = bronze_kep.count()
 
 fail_duration_outlier = bronze_kep.filter(
@@ -434,7 +435,7 @@ silver_kep = (bronze_kep
     .dropDuplicates(["event_id"])
 )
 
-target = "workspace.aade.silver_kep_events_clean"
+target = "workspace.aade_stream.silver_kep_events_clean"
 if spark.catalog.tableExists(target):
     delta = DeltaTable.forName(spark, target)
     (delta.alias("t")
@@ -456,7 +457,7 @@ print(f"  Quality issues: {fail_duration_outlier} duration outliers")
 
 # COMMAND ----------
 
-bronze_efka = spark.table("workspace.aade.bronze_efka")
+bronze_efka = spark.table("workspace.aade_stream.bronze_efka")
 total_efka = bronze_efka.count()
 
 fail_zero_income = bronze_efka.filter(col("gross_income") <= 0).count()
@@ -475,7 +476,7 @@ silver_efka = (bronze_efka
     .dropDuplicates(["contribution_id"])
 )
 
-target = "workspace.aade.silver_efka_contributions_clean"
+target = "workspace.aade_stream.silver_efka_contributions_clean"
 if spark.catalog.tableExists(target):
     delta = DeltaTable.forName(spark, target)
     (delta.alias("t")
@@ -508,7 +509,7 @@ else:
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE TABLE workspace.aade.gold_citizen_360 AS
+# MAGIC CREATE OR REPLACE TABLE workspace.aade_stream.gold_citizen_360 AS
 # MAGIC WITH tax_agg AS (
 # MAGIC   SELECT afm,
 # MAGIC          COUNT(*)                       AS total_declarations,
@@ -516,28 +517,28 @@ else:
 # MAGIC          AVG(tax_amount)                AS avg_tax_per_declaration,
 # MAGIC          SUM(CASE WHEN status='APPROVED' THEN 1 ELSE 0 END) AS approved_count,
 # MAGIC          SUM(CASE WHEN status='REJECTED' THEN 1 ELSE 0 END) AS rejected_count
-# MAGIC   FROM workspace.aade.silver_tax_declarations_clean
+# MAGIC   FROM workspace.aade_stream.silver_tax_declarations_clean
 # MAGIC   GROUP BY afm
 # MAGIC ),
 # MAGIC invoice_agg AS (
 # MAGIC   SELECT issuer_afm AS afm,
 # MAGIC          COUNT(*)                       AS invoices_issued,
 # MAGIC          SUM(total_amount)              AS total_invoiced
-# MAGIC   FROM workspace.aade.silver_invoices_clean
+# MAGIC   FROM workspace.aade_stream.silver_invoices_clean
 # MAGIC   GROUP BY issuer_afm
 # MAGIC ),
 # MAGIC kep_agg AS (
 # MAGIC   SELECT afm,
 # MAGIC          COUNT(*)                       AS kep_events_count,
 # MAGIC          AVG(duration_seconds)          AS avg_kep_duration_sec
-# MAGIC   FROM workspace.aade.silver_kep_events_clean
+# MAGIC   FROM workspace.aade_stream.silver_kep_events_clean
 # MAGIC   GROUP BY afm
 # MAGIC ),
 # MAGIC efka_agg AS (
 # MAGIC   SELECT afm,
 # MAGIC          SUM(contribution_amount)       AS total_efka_contributions,
 # MAGIC          MAX(category)                  AS efka_category
-# MAGIC   FROM workspace.aade.silver_efka_contributions_clean
+# MAGIC   FROM workspace.aade_stream.silver_efka_contributions_clean
 # MAGIC   GROUP BY afm
 # MAGIC )
 # MAGIC SELECT
@@ -564,7 +565,7 @@ print("=== gold_citizen_360 — Top 10 ΑΦΜ by total_tax_paid ===")
 spark.sql("""
     SELECT afm, total_declarations, total_tax_paid, invoices_issued,
            kep_events_count, total_efka_contributions
-    FROM workspace.aade.gold_citizen_360
+    FROM workspace.aade_stream.gold_citizen_360
     ORDER BY total_tax_paid DESC
     LIMIT 10
 """).show()
@@ -577,26 +578,26 @@ spark.sql("""
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE TABLE workspace.aade.gold_daily_kpis AS
+# MAGIC CREATE OR REPLACE TABLE workspace.aade_stream.gold_daily_kpis AS
 # MAGIC WITH tax_daily AS (
 # MAGIC   SELECT date(submitted_at) AS day,
 # MAGIC          COUNT(*) AS declarations,
 # MAGIC          SUM(tax_amount) AS tax_collected
-# MAGIC   FROM workspace.aade.silver_tax_declarations_clean
+# MAGIC   FROM workspace.aade_stream.silver_tax_declarations_clean
 # MAGIC   GROUP BY date(submitted_at)
 # MAGIC ),
 # MAGIC kep_daily AS (
 # MAGIC   SELECT date(event_ts) AS day,
 # MAGIC          COUNT(*) AS kep_events,
 # MAGIC          AVG(duration_seconds) AS avg_duration
-# MAGIC   FROM workspace.aade.silver_kep_events_clean
+# MAGIC   FROM workspace.aade_stream.silver_kep_events_clean
 # MAGIC   GROUP BY date(event_ts)
 # MAGIC ),
 # MAGIC invoice_daily AS (
 # MAGIC   SELECT invoice_date AS day,
 # MAGIC          COUNT(*) AS invoices,
 # MAGIC          SUM(total_amount) AS gmv
-# MAGIC   FROM workspace.aade.silver_invoices_clean
+# MAGIC   FROM workspace.aade_stream.silver_invoices_clean
 # MAGIC   GROUP BY invoice_date
 # MAGIC )
 # MAGIC SELECT
@@ -615,7 +616,7 @@ spark.sql("""
 # COMMAND ----------
 
 print("=== gold_daily_kpis ===")
-spark.table("workspace.aade.gold_daily_kpis").show(15)
+spark.table("workspace.aade_stream.gold_daily_kpis").show(15)
 
 # COMMAND ----------
 
@@ -626,14 +627,14 @@ spark.table("workspace.aade.gold_daily_kpis").show(15)
 
 audit_records = []
 for src in sources:
-    bronze_count = spark.table(f"workspace.aade.bronze_{src}").count()
+    bronze_count = spark.table(f"workspace.aade_stream.bronze_{src}").count()
     silver_table = {
         "taxis": "silver_tax_declarations_clean",
         "mydata": "silver_invoices_clean",
         "kep": "silver_kep_events_clean",
         "efka": "silver_efka_contributions_clean",
     }[src]
-    silver_count = spark.table(f"workspace.aade.{silver_table}").count()
+    silver_count = spark.table(f"workspace.aade_stream.{silver_table}").count()
     audit_records.append({
         "source": src,
         "bronze_count": bronze_count,
@@ -644,12 +645,12 @@ for src in sources:
     })
 
 audit_df = spark.createDataFrame(pd.DataFrame(audit_records))
-audit_df.write.format("delta").mode("append").saveAsTable("workspace.aade.gold_audit_trail")
+audit_df.write.format("delta").mode("append").saveAsTable("workspace.aade_stream.gold_audit_trail")
 
 print("=== Pipeline Audit Trail ===")
 spark.sql("""
     SELECT pipeline_run_id, source, bronze_count, silver_count, drop_rate_pct
-    FROM workspace.aade.gold_audit_trail
+    FROM workspace.aade_stream.gold_audit_trail
     ORDER BY processed_at DESC
 """).show(truncate=False)
 
@@ -661,12 +662,12 @@ spark.sql("""
 # COMMAND ----------
 
 dq_df = spark.createDataFrame(pd.DataFrame(dq_records))
-dq_df.write.format("delta").mode("append").saveAsTable("workspace.aade.gold_data_quality_summary")
+dq_df.write.format("delta").mode("append").saveAsTable("workspace.aade_stream.gold_data_quality_summary")
 
 print("=== Data Quality Summary ===")
 spark.sql("""
     SELECT source, rule, failed_count, total_count, failure_pct
-    FROM workspace.aade.gold_data_quality_summary
+    FROM workspace.aade_stream.gold_data_quality_summary
     ORDER BY checked_at DESC, source
 """).show(truncate=False)
 
@@ -716,16 +717,16 @@ print(f"\n✓ Batch 2 written")
 # Re-run the bronze streams (incremental)
 print("\n=== Re-running Bronze streams (incremental) ===")
 queries2 = []
-queries2.append(bronze_stream("taxis",  "workspace.aade.bronze_taxis"))
-queries2.append(bronze_stream("mydata", "workspace.aade.bronze_mydata"))
-queries2.append(bronze_stream("kep",    "workspace.aade.bronze_kep"))
-queries2.append(bronze_stream("efka",   "workspace.aade.bronze_efka"))
+queries2.append(bronze_stream("taxis",  "workspace.aade_stream.bronze_taxis"))
+queries2.append(bronze_stream("mydata", "workspace.aade_stream.bronze_mydata"))
+queries2.append(bronze_stream("kep",    "workspace.aade_stream.bronze_kep"))
+queries2.append(bronze_stream("efka",   "workspace.aade_stream.bronze_efka"))
 for q in queries2:
     q.awaitTermination()
 
 print("\n=== Bronze counts μετά το Batch 2 ===")
 for src in sources:
-    cnt = spark.table(f"workspace.aade.bronze_{src}").count()
+    cnt = spark.table(f"workspace.aade_stream.bronze_{src}").count()
     print(f"  bronze_{src:8s}: {cnt:5d} rows")
 
 # COMMAND ----------
@@ -742,28 +743,28 @@ print("=" * 70)
 print("                  AADE STREAMING PIPELINE — RUN SUMMARY")
 print("=" * 70)
 for src in sources:
-    bronze = spark.table(f"workspace.aade.bronze_{src}").count()
+    bronze = spark.table(f"workspace.aade_stream.bronze_{src}").count()
     silver_table = {
         "taxis": "silver_tax_declarations_clean",
         "mydata": "silver_invoices_clean",
         "kep": "silver_kep_events_clean",
         "efka": "silver_efka_contributions_clean",
     }[src]
-    silver = spark.table(f"workspace.aade.{silver_table}").count()
+    silver = spark.table(f"workspace.aade_stream.{silver_table}").count()
     drop_pct = (bronze - silver) / max(bronze, 1) * 100
     bar = "█" * int(silver / max(bronze, 1) * 30)
     print(f"  {src:8s}  bronze: {bronze:5d}  →  silver: {silver:5d}  ({100-drop_pct:5.1f}% pass)  {bar}")
 print("=" * 70)
-print(f"  gold_citizen_360         : {spark.table('workspace.aade.gold_citizen_360').count()} ΑΦΜ")
-print(f"  gold_daily_kpis          : {spark.table('workspace.aade.gold_daily_kpis').count()} days")
-print(f"  gold_audit_trail         : {spark.table('workspace.aade.gold_audit_trail').count()} runs")
-print(f"  gold_data_quality_summary: {spark.table('workspace.aade.gold_data_quality_summary').count()} rules")
+print(f"  gold_citizen_360         : {spark.table('workspace.aade_stream.gold_citizen_360').count()} ΑΦΜ")
+print(f"  gold_daily_kpis          : {spark.table('workspace.aade_stream.gold_daily_kpis').count()} days")
+print(f"  gold_audit_trail         : {spark.table('workspace.aade_stream.gold_audit_trail').count()} runs")
+print(f"  gold_data_quality_summary: {spark.table('workspace.aade_stream.gold_data_quality_summary').count()} rules")
 print("=" * 70)
 
 # COMMAND ----------
 
 # Visualize bronze→silver retention per source
-audit_pdf = spark.table("workspace.aade.gold_audit_trail").toPandas()
+audit_pdf = spark.table("workspace.aade_stream.gold_audit_trail").toPandas()
 audit_pdf = audit_pdf.sort_values("processed_at")
 
 fig, ax = plt.subplots(figsize=(12, 5))
@@ -786,7 +787,7 @@ plt.show()
 # COMMAND ----------
 
 # Quality issues breakdown
-dq_pdf = spark.table("workspace.aade.gold_data_quality_summary").toPandas()
+dq_pdf = spark.table("workspace.aade_stream.gold_data_quality_summary").toPandas()
 fig, ax = plt.subplots(figsize=(12, 4.5))
 sources_dq = dq_pdf["source"].unique()
 colors = ["#4C72B0", "#55A868", "#C44E52", "#8172B2"]
