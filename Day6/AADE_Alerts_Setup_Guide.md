@@ -28,7 +28,7 @@
 
 | Πεδίο | Τιμή |
 |---|---|
-| **Email** | `gpittas@obstechnologies.com` (ή team alias) |
+| **Email** | `<your_email@example.com>` (ή team alias) |
 | **Trigger** | Επίλεξε από: |
 | | ☑️ On start |
 | | ☑️ **On success** (συνιστώ ναι) |

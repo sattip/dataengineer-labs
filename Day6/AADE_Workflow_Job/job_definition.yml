@@ -20,7 +20,7 @@ resources:
         team: data-engineering
         domain: aade
         cost_center: tax-analytics
-        owner: gpittas@obstechnologies.com
+        owner: <your_email@example.com>
 
       # Schedule: daily 06:00 Athens time. PAUSED by default — unpause manually.
       schedule:
@@ -31,9 +31,9 @@ resources:
       # Job-level notifications
       email_notifications:
         on_failure:
-          - gpittas@obstechnologies.com
+          - <your_email@example.com>
         on_duration_warning_threshold_exceeded:
-          - gpittas@obstechnologies.com
+          - <your_email@example.com>
         no_alert_for_skipped_runs: false
 
       # Global limits
@@ -58,7 +58,7 @@ resources:
         - task_key: task_1_bronze
           description: "Bronze ingestion: Auto Loader για 4 sources (TAXIS, myDATA, ΚΕΠ, ΕΦΚΑ)"
           notebook_task:
-            notebook_path: /Users/gpittas@obstechnologies.com/AADE_Workflow_Job/01_bronze_ingestion
+            notebook_path: /Users/<your_email@example.com>/AADE_Workflow_Job/01_bronze_ingestion
             source: WORKSPACE
           timeout_seconds: 1200
           max_retries: 1
@@ -66,7 +66,7 @@ resources:
           retry_on_timeout: true
           email_notifications:
             on_failure:
-              - gpittas@obstechnologies.com
+              - <your_email@example.com>
 
         # ── Task 2: Silver Quality + MERGE ───────────────────────────
         - task_key: task_2_silver
@@ -74,7 +74,7 @@ resources:
           depends_on:
             - task_key: task_1_bronze
           notebook_task:
-            notebook_path: /Users/gpittas@obstechnologies.com/AADE_Workflow_Job/02_silver_quality
+            notebook_path: /Users/<your_email@example.com>/AADE_Workflow_Job/02_silver_quality
             source: WORKSPACE
           timeout_seconds: 1200
           max_retries: 1
@@ -86,7 +86,7 @@ resources:
           depends_on:
             - task_key: task_2_silver
           notebook_task:
-            notebook_path: /Users/gpittas@obstechnologies.com/AADE_Workflow_Job/03_gold_aggregations
+            notebook_path: /Users/<your_email@example.com>/AADE_Workflow_Job/03_gold_aggregations
             source: WORKSPACE
           timeout_seconds: 1200
           max_retries: 0

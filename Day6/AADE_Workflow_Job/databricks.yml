@@ -17,11 +17,11 @@ bundle:
 variables:
   notebook_root:
     description: "Root path των notebooks στο workspace"
-    default: "/Users/gpittas@obstechnologies.com/AADE_Workflow_Job"
+    default: "/Users/<your_email@example.com>/AADE_Workflow_Job"
 
   notification_email:
     description: "Email για failure notifications"
-    default: "gpittas@obstechnologies.com"
+    default: "<your_email@example.com>"
 
 # Multi-environment targets
 targets:
@@ -29,21 +29,21 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://dbc-d68abe5a-a04b.cloud.databricks.com
+      host: https://<your-workspace>.cloud.databricks.com
     variables:
       notification_email: "dev-team@aade.gr"
 
   staging:
     mode: production
     workspace:
-      host: https://dbc-d68abe5a-a04b.cloud.databricks.com
+      host: https://<your-workspace>.cloud.databricks.com
     variables:
       notification_email: "staging-alerts@aade.gr"
 
   prod:
     mode: production
     workspace:
-      host: https://dbc-d68abe5a-a04b.cloud.databricks.com
+      host: https://<your-workspace>.cloud.databricks.com
     variables:
       notification_email: "ops-team@aade.gr"
     # Σε prod, ξεκολλάμε το pause_status
