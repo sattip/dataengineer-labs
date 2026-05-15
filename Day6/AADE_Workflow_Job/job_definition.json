@@ -1,0 +1,78 @@
+{
+  "name": "aade_daily_pipeline",
+  "description": "Daily ΑΑΔΕ medallion pipeline — Bronze → Silver → Gold με 3 sequential tasks.",
+  "tags": {
+    "team": "data-engineering",
+    "domain": "aade",
+    "cost_center": "tax-analytics",
+    "owner": "gpittas@obstechnologies.com"
+  },
+  "schedule": {
+    "quartz_cron_expression": "0 0 6 * * ?",
+    "timezone_id": "Europe/Athens",
+    "pause_status": "PAUSED"
+  },
+  "email_notifications": {
+    "on_failure": ["gpittas@obstechnologies.com"],
+    "on_duration_warning_threshold_exceeded": ["gpittas@obstechnologies.com"],
+    "no_alert_for_skipped_runs": false
+  },
+  "timeout_seconds": 3600,
+  "max_concurrent_runs": 1,
+  "tasks": [
+    {
+      "task_key": "task_1_bronze",
+      "description": "Bronze ingestion: Auto Loader για 4 sources (TAXIS, myDATA, ΚΕΠ, ΕΦΚΑ)",
+      "notebook_task": {
+        "notebook_path": "/Users/gpittas@obstechnologies.com/AADE_Workflow_Job/01_bronze_ingestion",
+        "source": "WORKSPACE"
+      },
+      "timeout_seconds": 1200,
+      "max_retries": 1,
+      "min_retry_interval_millis": 60000,
+      "retry_on_timeout": true,
+      "email_notifications": {
+        "on_failure": ["gpittas@obstechnologies.com"]
+      }
+    },
+    {
+      "task_key": "task_2_silver",
+      "description": "Silver layer: data quality filtering + MERGE upserts σε 4 cleansed tables",
+      "depends_on": [
+        { "task_key": "task_1_bronze" }
+      ],
+      "notebook_task": {
+        "notebook_path": "/Users/gpittas@obstechnologies.com/AADE_Workflow_Job/02_silver_quality",
+        "source": "WORKSPACE"
+      },
+      "timeout_seconds": 1200,
+      "max_retries": 1,
+      "min_retry_interval_millis": 60000
+    },
+    {
+      "task_key": "task_3_gold",
+      "description": "Gold layer: aggregations για citizen_360, daily_kpis, pipeline_health audit",
+      "depends_on": [
+        { "task_key": "task_2_silver" }
+      ],
+      "notebook_task": {
+        "notebook_path": "/Users/gpittas@obstechnologies.com/AADE_Workflow_Job/03_gold_aggregations",
+        "source": "WORKSPACE"
+      },
+      "timeout_seconds": 1200,
+      "max_retries": 0
+    }
+  ],
+  "health": {
+    "rules": [
+      {
+        "metric": "RUN_DURATION_SECONDS",
+        "op": "GREATER_THAN",
+        "value": 1800
+      }
+    ]
+  },
+  "queue": {
+    "enabled": true
+  }
+}
