@@ -149,25 +149,30 @@ REQUIRED_CSVS = ["citizen_registry.csv", "taxis_declarations.csv",
                  "efka_contributions.csv", "kep_events.csv", "mydata_invoices.csv"]
 
 def _bootstrap():
-    import urllib.request, ssl, os
+    """Serverless-safe: writes directly to /Volumes path (no /tmp/ access needed)."""
+    import urllib.request
     spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG}")
-    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.bronze")
+    for s in ["bronze", "silver", "gold"]:
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{s}")
     spark.sql(f"CREATE VOLUME IF NOT EXISTS {CATALOG}.bronze.landing")
     try:
         existing = {f.name for f in dbutils.fs.ls(LANDING_PATH)}
     except: existing = set()
     missing = set(REQUIRED_CSVS) - existing
     if not missing:
-        print(f"✅ Όλα τα {len(REQUIRED_CSVS)} CSVs είναι ήδη στο volume")
+        print(f"✅ All {len(REQUIRED_CSVS)} CSVs already in volume")
         return
-    print(f"⬇️  Κατεβάζω {len(missing)} CSVs από GitHub...")
+    print(f"⬇️  Downloading {len(missing)} CSVs από GitHub...")
     for f in missing:
         url = f"{GITHUB_BASE}/{f}"
-        local = f"/tmp/{f}"
-        urllib.request.urlretrieve(url, local)
-        dbutils.fs.cp(f"file:{local}", f"{LANDING_PATH}/{f}")
-        os.remove(local)
+        target = f"{LANDING_PATH}/{f}"
+        # Direct stream from URL → volume (no /tmp/, serverless-safe)
+        with urllib.request.urlopen(url, timeout=30) as response:
+            content = response.read()
+        with open(target, "wb") as fp:
+            fp.write(content)
         print(f"   ✅ {f}")
+
 _bootstrap()
 
 # COMMAND ----------
