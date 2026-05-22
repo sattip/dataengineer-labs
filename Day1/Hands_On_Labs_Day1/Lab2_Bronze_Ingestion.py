@@ -113,6 +113,136 @@
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC
+# MAGIC ## 2.8 Data Contracts — Validating What You Receive
+# MAGIC
+# MAGIC Ένα **Data Contract** είναι μια **εγγύηση** μεταξύ source system και Bronze layer:
+# MAGIC
+# MAGIC > «Το TAXIS εγγυάται ότι κάθε CSV θα έχει column `afm` με 9 ψηφία, μη NULL.»
+# MAGIC > «Το Bronze εγγυάται ότι θα reject-άρει οποιοδήποτε record δεν τηρεί το contract.»
+# MAGIC
+# MAGIC ### Γιατί;
+# MAGIC
+# MAGIC Χωρίς contract:
+# MAGIC - Σιωπηλά μπαίνουν bad data σε Bronze
+# MAGIC - Silver/Gold "ξυπνάει" 3 μήνες μετά με broken queries
+# MAGIC - Κανείς δεν ξέρει αν η source άλλαξε
+# MAGIC
+# MAGIC Με contract:
+# MAGIC - **Fail fast**: αν schema αλλάξει, pipeline σπάει με σαφές error
+# MAGIC - **Documentation**: το contract είναι τόσο docs όσο και code
+# MAGIC - **Trust boundary**: clear ευθύνες producer vs consumer
+# MAGIC
+# MAGIC ### Σχήμα data contract (απλό)
+# MAGIC
+# MAGIC ```python
+# MAGIC CONTRACTS = {
+# MAGIC     "citizen_registry": {
+# MAGIC         "version": "1.0",
+# MAGIC         "owner": "registry-team@gov.gr",
+# MAGIC         "primary_key": "afm",
+# MAGIC         "columns": {
+# MAGIC             "afm":        {"type": "string", "nullable": False, "regex": r"^\d{9}$"},
+# MAGIC             "full_name":  {"type": "string", "nullable": True,  "max_length": 200},
+# MAGIC             "region":     {"type": "string", "nullable": True,  "allowed": ["ATTICA", "MACEDONIA", "CRETE", "EPIRUS", "THESSALY", "PELOPONNESE"]},
+# MAGIC             "birth_year": {"type": "integer","nullable": True,  "min": 1900, "max": 2026},
+# MAGIC             "is_active":  {"type": "boolean","nullable": False},
+# MAGIC             "updated_at": {"type": "timestamp", "nullable": True},
+# MAGIC         },
+# MAGIC         "quality": {
+# MAGIC             "max_null_pct": {"afm": 0.0, "is_active": 0.0},
+# MAGIC             "min_rows": 1,
+# MAGIC             "max_rows": 100_000_000,
+# MAGIC         }
+# MAGIC     },
+# MAGIC     "taxis_declarations": { ... },
+# MAGIC     # ... ένα ανά source
+# MAGIC }
+# MAGIC ```
+# MAGIC
+# MAGIC ### Validation function (skeleton)
+# MAGIC
+# MAGIC ```python
+# MAGIC from pyspark.sql.functions import col, count, when, length
+# MAGIC
+# MAGIC def validate_contract(df, contract):
+# MAGIC     """Raises αν το df δεν τηρεί το contract. Returns df αν OK."""
+# MAGIC     n = df.count()
+# MAGIC
+# MAGIC     # Check 1 — Row count bounds
+# MAGIC     q = contract.get("quality", {})
+# MAGIC     if n < q.get("min_rows", 0):
+# MAGIC         raise ValueError(f"❌ Contract violation: {n} rows < min {q['min_rows']}")
+# MAGIC     if n > q.get("max_rows", float("inf")):
+# MAGIC         raise ValueError(f"❌ Contract violation: {n} rows > max {q['max_rows']}")
+# MAGIC
+# MAGIC     # Check 2 — Schema (columns exist + nullable rules)
+# MAGIC     for col_name, spec in contract["columns"].items():
+# MAGIC         if col_name not in df.columns:
+# MAGIC             raise ValueError(f"❌ Missing column: {col_name}")
+# MAGIC         if not spec["nullable"]:
+# MAGIC             nulls = df.filter(col(col_name).isNull()).count()
+# MAGIC             if nulls > 0:
+# MAGIC                 raise ValueError(f"❌ {col_name}: {nulls} nulls (non-nullable)")
+# MAGIC
+# MAGIC     # Check 3 — Per-column quality thresholds
+# MAGIC     for col_name, max_null_pct in q.get("max_null_pct", {}).items():
+# MAGIC         nulls = df.filter(col(col_name).isNull()).count()
+# MAGIC         null_pct = 100 * nulls / n if n > 0 else 0
+# MAGIC         if null_pct > max_null_pct:
+# MAGIC             raise ValueError(
+# MAGIC                 f"❌ {col_name}: {null_pct:.2f}% nulls > {max_null_pct}% threshold"
+# MAGIC             )
+# MAGIC
+# MAGIC     # Check 4 — Regex patterns
+# MAGIC     for col_name, spec in contract["columns"].items():
+# MAGIC         if "regex" in spec and col_name in df.columns:
+# MAGIC             bad = df.filter(
+# MAGIC                 col(col_name).isNotNull() &
+# MAGIC                 ~col(col_name).cast("string").rlike(spec["regex"])
+# MAGIC             ).count()
+# MAGIC             if bad > 0:
+# MAGIC                 raise ValueError(f"❌ {col_name}: {bad} rows fail regex {spec['regex']}")
+# MAGIC
+# MAGIC     # Check 5 — Allowed values
+# MAGIC     for col_name, spec in contract["columns"].items():
+# MAGIC         if "allowed" in spec and col_name in df.columns:
+# MAGIC             bad = df.filter(
+# MAGIC                 col(col_name).isNotNull() &
+# MAGIC                 ~col(col_name).isin(spec["allowed"])
+# MAGIC             ).count()
+# MAGIC             if bad > 0:
+# MAGIC                 raise ValueError(f"❌ {col_name}: {bad} rows outside allowed values")
+# MAGIC
+# MAGIC     print(f"✅ Contract validated: {n} rows pass")
+# MAGIC     return df
+# MAGIC ```
+# MAGIC
+# MAGIC ### Πού μπαίνει στο pipeline;
+# MAGIC
+# MAGIC ```python
+# MAGIC def load_to_bronze(source, entity, csv_file):
+# MAGIC     df = spark.read.option("header", "true").csv(...)
+# MAGIC     df = validate_contract(df, CONTRACTS[source])   # ← ΕΔΩ — πριν το write
+# MAGIC     # ... audit cols, write Delta ...
+# MAGIC ```
+# MAGIC
+# MAGIC **Fail-fast pattern**: αν data δεν τηρούν contract → exception → pipeline stops → alert.
+# MAGIC
+# MAGIC ### Production patterns
+# MAGIC
+# MAGIC | Pattern | Tool |
+# MAGIC |---|---|
+# MAGIC | YAML-based contracts | dbt schema tests, Great Expectations, Soda |
+# MAGIC | Runtime validation | DLT expectations (`@dlt.expect_or_fail`) |
+# MAGIC | Schema registry | Confluent Schema Registry για Kafka |
+# MAGIC | Versioning | Git + semver στο contract YAML |
+# MAGIC
+# MAGIC Σήμερα στο stretch exercise, **θα γράψεις τον δικό σου mini contract validator**.
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ---
 # MAGIC # 🎯 ΜΕΡΟΣ 2 — ΕΚΦΩΝΗΣΗ
 # MAGIC
@@ -251,9 +381,47 @@ def load_to_bronze(source: str, entity: str, csv_filename: str):
         source: source system name (e.g. 'taxis')
         entity: entity name (e.g. 'declarations')
         csv_filename: filename in landing volume (e.g. 'taxis_declarations.csv')
+
+    Returns:
+        int: row count of resulting Bronze table
     """
-    # 👇 Implement σας εδώ
-    pass
+    # ═══════════════════════════════════════════════════════════════════
+    # 👇 IMPLEMENT BELOW — pseudocode hints:
+    # ═══════════════════════════════════════════════════════════════════
+    #
+    # STEP A — Build paths
+    #   target_table = f"gt_lab.bronze.{source}_{entity}_raw"
+    #   csv_path     = f"{LANDING_PATH}/{csv_filename}"
+    #
+    # STEP B — Read CSV (decide: inferSchema or explicit?)
+    #   df = spark.read.option("header", "true") \
+    #             .option("inferSchema", "true") \
+    #             .csv(csv_path)
+    #
+    # STEP C — (Optional) Validate against contract — δες Stretch 4
+    #   df = validate_contract(df, CONTRACTS[source])
+    #
+    # STEP D — Add audit columns
+    #   from pyspark.sql.functions import current_timestamp, input_file_name, to_date
+    #   df_audited = (df
+    #       .withColumn("_ingestion_ts",   current_timestamp())
+    #       .withColumn("_source_file",    input_file_name())
+    #       .withColumn("_ingestion_date", to_date(current_timestamp()))
+    #   )
+    #
+    # STEP E — Write Bronze Delta (idempotent + partitioned)
+    #   df_audited.write \
+    #       .format("delta") \
+    #       .mode("overwrite") \
+    #       .partitionBy("_ingestion_date") \
+    #       .option("overwriteSchema", "true") \
+    #       .saveAsTable(target_table)
+    #
+    # STEP F — Return count για verification
+    #   return spark.table(target_table).count()
+    # ═══════════════════════════════════════════════════════════════════
+
+    pass  # 👈 Replace με τη δική σου implementation
 
 
 # COMMAND ----------
@@ -657,6 +825,104 @@ display(spark.table(target_table).limit(5))
 
 
 
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 4 — Data Contract Validator (Production Pattern)
+# MAGIC
+# MAGIC Ας υλοποιήσεις το data contract pattern για τα δικά σου Bronze tables.
+# MAGIC
+# MAGIC ### Στόχος
+# MAGIC
+# MAGIC 1. Φτιάξε ένα `CONTRACTS` dict με spec για **2 sources** (citizen + taxis)
+# MAGIC 2. Φτιάξε function `validate_contract(df, contract)` που εφαρμόζει 5 checks:
+# MAGIC    - Row count bounds (`min_rows`, `max_rows`)
+# MAGIC    - Required columns υπάρχουν
+# MAGIC    - Non-nullable columns δεν έχουν NULLs
+# MAGIC    - Regex pattern matches (π.χ. AFM 9 digits)
+# MAGIC    - Allowed values (π.χ. region σε whitelist)
+# MAGIC 3. **Integrate** στο `load_to_bronze()` σου — call πριν το write
+# MAGIC 4. **Test failure**: τροποποίησε contract να raise (π.χ. `min_rows=1000`) και verify ότι το pipeline σταματάει
+# MAGIC
+# MAGIC ### Hints
+# MAGIC
+# MAGIC - Δες theory section **2.8 Data Contracts** για το full skeleton
+# MAGIC - Use `df.filter(~col("x").rlike(pattern)).count()` για regex check
+# MAGIC - Use `col("x").isin(allowed_list)` για allowed values check
+# MAGIC - Use `df.filter(col("x").isNull()).count()` για null check
+# MAGIC
+# MAGIC ### Bonus questions για ομάδα
+# MAGIC
+# MAGIC - **Πού** πρέπει να ζει το contract; (Code? YAML? Database? Schema Registry?)
+# MAGIC - **Ποιος** το αλλάζει; (DE? Data Steward? Source team?)
+# MAGIC - **Πότε** trigger-άρει re-validation; (Κάθε ingestion? Schema change? Time-based?)
+# MAGIC - **Πώς** κάνεις versioning; (Git? SemVer? Contract registry?)
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 4 — Data Contract Validator
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+#
+# Pseudocode skeleton:
+#
+# 1) Define CONTRACTS dict
+#    CONTRACTS = {
+#        "citizen": {
+#            "version": "1.0",
+#            "owner": "registry-team@gov.gr",
+#            "columns": {
+#                "afm":        {"type": "string", "nullable": False, "regex": r"^\d{9}$"},
+#                "is_active":  {"type": "boolean", "nullable": False},
+#                "birth_year": {"type": "integer", "nullable": True, "min": 1900},
+#                # ... add the rest
+#            },
+#            "quality": {
+#                "min_rows": 1,
+#                "max_rows": 100_000_000,
+#                "max_null_pct": {"afm": 0.0}
+#            }
+#        },
+#        "taxis": {
+#            # ... define ως άσκηση
+#        },
+#    }
+#
+# 2) Write validate_contract(df, contract)
+#    - 5 checks (row count, columns, nullable, regex, allowed)
+#    - Raise ValueError on first failure
+#    - Print success summary
+#
+# 3) Integrate σε load_to_bronze:
+#    def load_to_bronze(source, entity, csv_file):
+#        df = spark.read.csv(...)
+#        df = validate_contract(df, CONTRACTS[source])  # ← ΕΔΩ
+#        # ... audit + write
+#
+# 4) Test με 2 πηγές: citizen + taxis. Παρατήρησε αν περνάει.
+#
+# 5) BREAK TEST: αλλάξε min_rows σε 1000. Re-run. Verify exception.
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 🎓 Discussion (after coding)
+# MAGIC
+# MAGIC Αφού δοκιμάσεις:
+# MAGIC
+# MAGIC 1. **Πόσο dependable** είναι αυτό vs ένα DLT expectation;
+# MAGIC    *(Hint: DLT τρέχει το expectation per record στο engine — πιο γρήγορο)*
+# MAGIC
+# MAGIC 2. **Performance**: Τι αν τρέχεις 5 separate counts ανά column για null check;
+# MAGIC    *(Spoiler: 5 separate scans. Καλύτερο: ένα aggregation με conditional sum)*
+# MAGIC
+# MAGIC 3. **Contract evolution**: Αν source προσθέσει νέο column, ποιος ενημερώνει το contract;
+# MAGIC    *(Process: source team → PR στο contracts repo → review → merge → CI deploys)*
 
 # COMMAND ----------
 

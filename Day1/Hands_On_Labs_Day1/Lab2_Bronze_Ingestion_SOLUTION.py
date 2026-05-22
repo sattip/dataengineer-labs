@@ -496,6 +496,170 @@ for source, entity, _ in SOURCES:
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC %md
+# MAGIC ## 🌟 STRETCH 4 — Data Contract Validator
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution: CONTRACTS dict + validator
+from pyspark.sql.functions import col, count, when, length as _len
+
+# 1) Define CONTRACTS dict (2 sources για demo — extend για όλες τις 5)
+CONTRACTS = {
+    "citizen": {
+        "version": "1.0",
+        "owner": "registry-team@gov.gr",
+        "primary_key": "afm",
+        "columns": {
+            "afm":        {"type": "string",   "nullable": False, "regex": r"^\d{9}$"},
+            "full_name":  {"type": "string",   "nullable": True,  "max_length": 200},
+            "region":     {"type": "string",   "nullable": True,
+                          "allowed": ["ATTICA","MACEDONIA","CRETE","EPIRUS","THESSALY","PELOPONNESE"]},
+            "birth_year": {"type": "integer",  "nullable": True, "min": 1900, "max": 2026},
+            "is_active":  {"type": "boolean",  "nullable": False},
+            "updated_at": {"type": "timestamp","nullable": True},
+        },
+        "quality": {
+            "min_rows": 1,
+            "max_rows": 100_000_000,
+            "max_null_pct": {"afm": 0.0, "is_active": 0.0},
+        }
+    },
+    "taxis": {
+        "version": "1.0",
+        "owner": "taxis-team@aade.gr",
+        "primary_key": "statement_id",
+        "columns": {
+            "statement_id": {"type": "string",  "nullable": False},
+            "afm":          {"type": "string",  "nullable": False, "regex": r"^\d{9}$"},
+            "fiscal_year":  {"type": "integer", "nullable": False, "min": 2000, "max": 2030},
+            "tax_amount":   {"type": "decimal", "nullable": True,  "min": 0},
+            "status":       {"type": "string",  "nullable": False,
+                            "allowed": ["Submitted","Approved","Rejected","Pending"]},
+        },
+        "quality": {
+            "min_rows": 1,
+            "max_rows": 10_000_000,
+            "max_null_pct": {"afm": 0.0, "statement_id": 0.0},
+        }
+    },
+}
+
+
+# 2) Validator function
+def validate_contract(df, contract):
+    """Raises αν το df δεν τηρεί το contract. Returns df αν OK."""
+    name = contract.get("primary_key", "unknown")
+    n = df.count()
+
+    # Check 1 — Row count bounds
+    q = contract.get("quality", {})
+    min_rows = q.get("min_rows", 0)
+    max_rows = q.get("max_rows", float("inf"))
+    if n < min_rows:
+        raise ValueError(f"❌ Contract violation: {n} rows < min {min_rows}")
+    if n > max_rows:
+        raise ValueError(f"❌ Contract violation: {n} rows > max {max_rows}")
+    print(f"  ✅ Row count {n} ∈ [{min_rows}, {max_rows}]")
+
+    # Check 2 — Required columns υπάρχουν
+    for c, spec in contract["columns"].items():
+        if c not in df.columns:
+            raise ValueError(f"❌ Missing column: {c}")
+    print(f"  ✅ All {len(contract['columns'])} columns present")
+
+    # Check 3 — Non-nullable columns
+    for c, spec in contract["columns"].items():
+        if not spec.get("nullable", True):
+            nulls = df.filter(col(c).isNull()).count()
+            if nulls > 0:
+                raise ValueError(f"❌ {c}: {nulls} nulls (non-nullable)")
+    print(f"  ✅ Non-nullable constraints satisfied")
+
+    # Check 4 — Quality thresholds (% null per column)
+    for c, max_pct in q.get("max_null_pct", {}).items():
+        nulls = df.filter(col(c).isNull()).count() if c in df.columns else 0
+        null_pct = 100.0 * nulls / n if n > 0 else 0.0
+        if null_pct > max_pct:
+            raise ValueError(
+                f"❌ {c}: {null_pct:.2f}% nulls > {max_pct}% threshold"
+            )
+    print(f"  ✅ Null percentage thresholds met")
+
+    # Check 5 — Regex patterns
+    for c, spec in contract["columns"].items():
+        if "regex" in spec and c in df.columns:
+            bad = df.filter(
+                col(c).isNotNull() &
+                ~col(c).cast("string").rlike(spec["regex"])
+            ).count()
+            if bad > 0:
+                raise ValueError(f"❌ {c}: {bad} rows fail regex {spec['regex']}")
+    print(f"  ✅ Regex patterns valid")
+
+    # Check 6 — Allowed values
+    for c, spec in contract["columns"].items():
+        if "allowed" in spec and c in df.columns:
+            bad = df.filter(
+                col(c).isNotNull() &
+                ~col(c).isin(spec["allowed"])
+            ).count()
+            if bad > 0:
+                raise ValueError(f"❌ {c}: {bad} rows outside allowed values")
+    print(f"  ✅ Allowed values respected")
+
+    print(f"\n🎉 Contract validated: {n} rows pass ({contract.get('version')})")
+    return df
+
+
+# 3) Run validator σε citizen και taxis
+print("=== Validating citizen ===")
+df_citizen = spark.table("gt_lab.bronze.citizen_citizen_registry_raw") \
+    .withColumn("afm", col("afm").cast("string"))
+validate_contract(df_citizen, CONTRACTS["citizen"])
+
+print("\n=== Validating taxis ===")
+df_taxis = spark.table("gt_lab.bronze.taxis_taxis_declarations_raw") \
+    .withColumn("afm", col("afm").cast("string")) \
+    .withColumn("statement_id", col("statement_id").cast("string"))
+validate_contract(df_taxis, CONTRACTS["taxis"])
+
+# COMMAND ----------
+
+# DBTITLE 1,Failure mode test — έσπασε το contract σκόπιμα
+# Set min_rows = 1000 → πρέπει να σπάσει
+broken_contract = dict(CONTRACTS["citizen"])
+broken_contract["quality"] = {**CONTRACTS["citizen"]["quality"], "min_rows": 1000}
+
+try:
+    validate_contract(df_citizen, broken_contract)
+    print("❌ Test FAILED — δεν έσπασε όπως αναμενόταν!")
+except ValueError as e:
+    print(f"✅ Test PASSED — contract caught the violation:")
+    print(f"   {e}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC **🎓 Trainer notes:**
+# MAGIC
+# MAGIC - **Performance optimization**: 5 separate `count()` calls = 5 full scans. Production:
+# MAGIC   ```python
+# MAGIC   stats = df.agg(
+# MAGIC       count("*").alias("total"),
+# MAGIC       count(when(col("afm").isNull(), True)).alias("afm_nulls"),
+# MAGIC       count(when(~col("afm").rlike(r"^\d{9}$"), True)).alias("afm_bad_format"),
+# MAGIC       # ... όλα τα checks σε ένα aggregation
+# MAGIC   ).collect()[0]
+# MAGIC   ```
+# MAGIC - **Contract location**: Σε production, contracts ζουν σε **separate git repo** ή **schema registry** (Confluent, Apicurio). Κανείς δεν αλλάζει τα contracts ad-hoc.
+# MAGIC - **Versioning**: SemVer (1.0 → 1.1 για backwards-compat, 2.0 για breaking change). Consumers δηλώνουν ποια version υποστηρίζουν.
+# MAGIC - **Alternative tools**: Great Expectations, Soda, dbt tests, DLT expectations — όλα κάνουν similar work με different ergonomics.
+# MAGIC - **Production gold**: Contract violations → alerting (PagerDuty), όχι silent failures.
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## 🏆 SUPER STRETCH — DESCRIBE HISTORY + Time Travel
 
 # COMMAND ----------
