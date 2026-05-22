@@ -383,3 +383,174 @@ else:
 # MAGIC    *(Spoiler: `GRANT USAGE ON CATALOG ... + GRANT SELECT ON SCHEMA gt_lab.gold TO `analysts``)*
 # MAGIC
 # MAGIC Αν θέλεις να συζητήσεις αυτές τις ερωτήσεις, σήκωσε χέρι!
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+# MAGIC # 🚀 STRETCH EXERCISES — Για όσους τελειώσουν νωρίτερα
+# MAGIC
+# MAGIC Αν έχεις φτάσει εδώ πριν τα 80', πάμε σε πιο production patterns.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 1 — RBAC με GRANT/REVOKE
+# MAGIC
+# MAGIC Στην πραγματικότητα, δεν είσαι μόνος σου στο catalog. Πρέπει να δώσεις access σε:
+# MAGIC - **Data engineers** → read+write παντού
+# MAGIC - **Analysts** → read μόνο στο gold
+# MAGIC - **Auditors** → read-only σε όλα + audit logs
+# MAGIC
+# MAGIC ### 📚 Theory snippet
+# MAGIC
+# MAGIC Στο Unity Catalog, η πρόσβαση δουλεύει **hierarchical**:
+# MAGIC ```
+# MAGIC USAGE on catalog → USAGE on schema → SELECT/MODIFY on table
+# MAGIC ```
+# MAGIC
+# MAGIC Πρέπει και τα ΤΡΙΑ επίπεδα. Παρακάμπτεις ένα → access denied.
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Φτιάξε ένα φανταστικό group (αν το workspace επιτρέπει) ή χρησιμοποίησε ένα υπάρχον:
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 1 — Grant SELECT στο gold για 'analysts'
+# 👇 ΓΡΑΨΕ ΤΟΝ ΚΩΔΙΚΑ ΣΟΥ
+# Reference patterns:
+#
+# spark.sql("GRANT USAGE ON CATALOG gt_lab TO `analysts`")
+# spark.sql("GRANT USAGE ON SCHEMA gt_lab.gold TO `analysts`")
+# spark.sql("GRANT SELECT ON ALL TABLES IN SCHEMA gt_lab.gold TO `analysts`")
+#
+# Verify με:
+# display(spark.sql("SHOW GRANTS ON SCHEMA gt_lab.gold"))
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 2 — Type-Safe Read με explicit schema
+# MAGIC
+# MAGIC Στο Step 6 διάβασες με `inferSchema=true`. Πρόβλημα: το AFM γίνεται integer → leading zeros χάνονται.
+# MAGIC
+# MAGIC ### 📚 Theory snippet
+# MAGIC
+# MAGIC Σε production, **πάντα δηλώνεις schema explicit**:
+# MAGIC
+# MAGIC ```python
+# MAGIC from pyspark.sql.types import (
+# MAGIC     StructType, StructField,
+# MAGIC     StringType, IntegerType, BooleanType, TimestampType
+# MAGIC )
+# MAGIC
+# MAGIC citizen_schema = StructType([
+# MAGIC     StructField("afm",         StringType(),  False),  # NOT NULL
+# MAGIC     StructField("full_name",   StringType(),  True),
+# MAGIC     StructField("region",      StringType(),  True),
+# MAGIC     StructField("birth_year",  IntegerType(), True),
+# MAGIC     StructField("is_active",   BooleanType(), True),
+# MAGIC     StructField("updated_at",  TimestampType(), True),
+# MAGIC ])
+# MAGIC
+# MAGIC df = (spark.read
+# MAGIC         .schema(citizen_schema)
+# MAGIC         .option("header", "true")
+# MAGIC         .csv("/Volumes/gt_lab/bronze/landing/citizen_registry.csv"))
+# MAGIC
+# MAGIC df.printSchema()  # afm θα φαίνεται ως string πια — leading zeros safe
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Διάβασε ξανά το `citizen_registry.csv` με explicit schema και επιβεβαίωσε ότι το `afm` είναι string.
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 2 — Read με explicit schema
+# 👇 ΓΡΑΨΕ ΤΟΝ ΚΩΔΙΚΑ ΣΟΥ
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 3 — Table comments + table properties
+# MAGIC
+# MAGIC Όταν φτιάχνεις tables, βάλε **descriptive metadata** για να τα βρίσκουν εύκολα οι analysts.
+# MAGIC
+# MAGIC ### 📚 Reference
+# MAGIC
+# MAGIC ```python
+# MAGIC # Save the citizen DataFrame ως managed Bronze table
+# MAGIC df.write.format("delta").mode("overwrite").saveAsTable("gt_lab.bronze.citizen_registry_raw")
+# MAGIC
+# MAGIC # Πρόσθεσε metadata
+# MAGIC spark.sql("""
+# MAGIC     ALTER TABLE gt_lab.bronze.citizen_registry_raw
+# MAGIC     SET TBLPROPERTIES (
+# MAGIC         'comment' = 'Raw citizen registry από CRM source',
+# MAGIC         'owner' = 'data-platform-team',
+# MAGIC         'pii_classification' = 'high',
+# MAGIC         'refresh_cadence' = 'daily'
+# MAGIC     )
+# MAGIC """)
+# MAGIC
+# MAGIC # Πρόσθεσε column comments
+# MAGIC spark.sql("ALTER TABLE gt_lab.bronze.citizen_registry_raw ALTER COLUMN afm COMMENT 'Αριθμός Φορολογικού Μητρώου (PII)'")
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Φτιάξε ένα table από το citizen_registry, πρόσθεσε metadata, και επιβεβαίωσε με `DESCRIBE EXTENDED`.
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 3 — Table με metadata
+# 👇 ΓΡΑΨΕ ΤΟΝ ΚΩΔΙΚΑ ΣΟΥ
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🏆 SUPER STRETCH — `dbutils.widgets` για παραμετροποίηση
+# MAGIC
+# MAGIC Production notebooks **δεν έχουν hardcoded values**. Όλα είναι parameters.
+# MAGIC
+# MAGIC ### 📚 Reference
+# MAGIC
+# MAGIC ```python
+# MAGIC # Στην αρχή του notebook
+# MAGIC dbutils.widgets.text("catalog_name", "gt_lab", "Catalog")
+# MAGIC dbutils.widgets.dropdown("environment", "dev", ["dev", "test", "prod"])
+# MAGIC dbutils.widgets.text("source_file", "citizen_registry.csv")
+# MAGIC
+# MAGIC # Read values
+# MAGIC CATALOG = dbutils.widgets.get("catalog_name")
+# MAGIC ENV     = dbutils.widgets.get("environment")
+# MAGIC FILE    = dbutils.widgets.get("source_file")
+# MAGIC
+# MAGIC # Use σε queries
+# MAGIC table_name = f"{CATALOG}_{ENV}.bronze.citizen_raw"
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Παραμετροποίησε ολόκληρο το lab — αλλάζεις catalog name από widget χωρίς να αγγίξεις τον κώδικα.
+
+# COMMAND ----------
+
+# DBTITLE 1,SUPER STRETCH — Parametrized notebook
+# 👇 ΓΡΑΨΕ ΤΟΝ ΚΩΔΙΚΑ ΣΟΥ
+
+

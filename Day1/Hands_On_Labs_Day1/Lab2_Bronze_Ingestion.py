@@ -420,3 +420,272 @@ if passed == total:
 # MAGIC ## 🔗 Επόμενο
 # MAGIC
 # MAGIC Day 2: **Bronze → Silver Transformations** — quality checks, deduplication, type enforcement.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+# MAGIC # 📖 REFERENCE EXAMPLE — Πλήρες worked example
+# MAGIC
+# MAGIC Αν θες να δεις **ένα ολοκληρωμένο παράδειγμα** πριν γράψεις τον δικό σου κώδικα, παρακάτω είναι το citizen_registry implemented end-to-end.
+# MAGIC
+# MAGIC ⚠️ **ΠΡΟΣΟΧΗ**: Μη το αντιγράψεις απευθείας. Δες το pattern, μετά εφάρμοσε ΔΙΚΗ σου λύση για όλες τις 5 πηγές.
+
+# COMMAND ----------
+
+# DBTITLE 1,REFERENCE — citizen_registry end-to-end (one source only)
+# Δες το pattern. Στον δικό σου κώδικα, κάνε το loop για 5 sources.
+
+from pyspark.sql.functions import current_timestamp, input_file_name, to_date
+from pyspark.sql.types import (
+    StructType, StructField,
+    StringType, IntegerType, BooleanType, TimestampType
+)
+
+# Step 1 — Define explicit schema (όχι inferSchema)
+citizen_schema = StructType([
+    StructField("afm",        StringType(),    False),
+    StructField("full_name",  StringType(),    True),
+    StructField("region",     StringType(),    True),
+    StructField("birth_year", IntegerType(),   True),
+    StructField("is_active",  BooleanType(),   True),
+    StructField("updated_at", TimestampType(), True),
+])
+
+# Step 2 — Read CSV with schema
+df_raw = (spark.read
+            .schema(citizen_schema)
+            .option("header", "true")
+            .csv("/Volumes/gt_lab/bronze/landing/citizen_registry.csv"))
+
+# Step 3 — Add audit columns
+df_with_audit = (df_raw
+    .withColumn("_ingestion_ts",   current_timestamp())
+    .withColumn("_source_file",    input_file_name())
+    .withColumn("_ingestion_date", to_date(current_timestamp()))
+)
+
+# Step 4 — Write Bronze Delta με partition + overwrite (idempotent)
+target_table = "gt_lab.bronze.citizen_registry_raw"
+(df_with_audit.write
+    .format("delta")
+    .mode("overwrite")
+    .partitionBy("_ingestion_date")
+    .option("overwriteSchema", "true")
+    .saveAsTable(target_table))
+
+# Step 5 — Add table metadata (production polish)
+spark.sql(f"""
+    ALTER TABLE {target_table}
+    SET TBLPROPERTIES (
+        'comment' = 'Raw citizen registry from CRM source',
+        'owner' = 'data-platform-team',
+        'pii_classification' = 'high'
+    )
+""")
+
+# Step 6 — Verify
+n = spark.table(target_table).count()
+print(f"✅ {target_table}: {n} rows")
+display(spark.table(target_table).limit(5))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🤔 Σκέψεις πάνω στο reference
+# MAGIC
+# MAGIC Πριν γράψεις τον δικό σου κώδικα στο Step 2 παραπάνω, σκέψου:
+# MAGIC
+# MAGIC 1. **Πώς θα γενικεύσεις** αυτό το pattern σε function για 5 πηγές;
+# MAGIC    *(Hint: τα schemas διαφέρουν ανά source. Πώς θα τα παραμετροποιήσεις;)*
+# MAGIC
+# MAGIC 2. **Τι θα έβαζες σαν πρόσθετο audit column;**
+# MAGIC    *(Hint: `_pipeline_run_id` με `uuid.uuid4()`; `_ingestion_user` με `current_user()`;)*
+# MAGIC
+# MAGIC 3. **Πώς θα testάρεις idempotency;**
+# MAGIC    *(Δες το Step 5 — `assert count_before == count_after`)*
+# MAGIC
+# MAGIC 4. **Τι αν το CSV έχει malformed row;**
+# MAGIC    *(Hint: `.option("mode", "PERMISSIVE")` ή `"FAILFAST"` ή `"DROPMALFORMED"`)*
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+# MAGIC # 🚀 STRETCH EXERCISES — Για όσους τελειώσουν νωρίς
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 1 — Schema evolution simulation
+# MAGIC
+# MAGIC **Σενάριο:** Το TAXIS upgraded και πρόσθεσε νέο column `tax_year_period` στο CSV. Πώς θα το χειριστείς χωρίς να σπάσει το pipeline;
+# MAGIC
+# MAGIC ### 📚 Theory
+# MAGIC
+# MAGIC Delta υποστηρίζει **schema evolution** με flag:
+# MAGIC
+# MAGIC ```python
+# MAGIC # Με mergeSchema=true, νέα columns προστίθενται αυτόματα
+# MAGIC df_new.write \
+# MAGIC     .format("delta") \
+# MAGIC     .mode("append") \
+# MAGIC     .option("mergeSchema", "true") \
+# MAGIC     .saveAsTable("gt_lab.bronze.taxis_declarations_raw")
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC 1. Διάβασε το `taxis_declarations.csv` ΞΑΝΑ
+# MAGIC 2. Πρόσθεσε artificial column: `df.withColumn("tax_year_period", lit("Q1-2026"))`
+# MAGIC 3. Γράψε στο Bronze με `mergeSchema=true`
+# MAGIC 4. Verify με `DESCRIBE` ότι το schema πλέον έχει την νέα στήλη
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 1 — Schema evolution
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 2 — Auto Loader pattern (production preview)
+# MAGIC
+# MAGIC Σε production δεν διαβάζεις CSVs με `spark.read.csv()` — χρησιμοποιείς **Auto Loader** που:
+# MAGIC - Παρακολουθεί directory για νέα files
+# MAGIC - Διαβάζει incremental (μόνο νέα)
+# MAGIC - Schema inference + evolution
+# MAGIC - Checkpoint state
+# MAGIC
+# MAGIC ### 📚 Reference pattern
+# MAGIC
+# MAGIC ```python
+# MAGIC checkpoint = "/Volumes/gt_lab/bronze/_checkpoints/citizen_autoloader"
+# MAGIC schema_loc = "/Volumes/gt_lab/bronze/_schemas/citizen"
+# MAGIC
+# MAGIC # Read stream με Auto Loader
+# MAGIC df_stream = (spark.readStream
+# MAGIC     .format("cloudFiles")
+# MAGIC     .option("cloudFiles.format", "csv")
+# MAGIC     .option("cloudFiles.schemaLocation", schema_loc)
+# MAGIC     .option("cloudFiles.inferColumnTypes", "true")
+# MAGIC     .option("header", "true")
+# MAGIC     .load("/Volumes/gt_lab/bronze/landing/citizen_registry*.csv"))
+# MAGIC
+# MAGIC # Write stream στο Bronze Delta
+# MAGIC query = (df_stream
+# MAGIC     .withColumn("_ingestion_ts", current_timestamp())
+# MAGIC     .withColumn("_source_file", input_file_name())
+# MAGIC     .writeStream
+# MAGIC     .format("delta")
+# MAGIC     .option("checkpointLocation", checkpoint)
+# MAGIC     .trigger(availableNow=True)   # σαν batch — runs once + stops
+# MAGIC     .toTable("gt_lab.bronze.citizen_registry_autoloader"))
+# MAGIC
+# MAGIC query.awaitTermination()
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Φτιάξε ένα 6ο table με Auto Loader pattern (αντί για τη δική σας function).
+# MAGIC Verify ότι **δεύτερη φορά που τρέχει**, ΔΕΝ διπλασιάζει — Auto Loader ξέρει ποια files ήδη διαβάστηκαν.
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 2 — Auto Loader
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🌟 Stretch 3 — Data Quality preview
+# MAGIC
+# MAGIC Στο Day 2 θα δούμε quality checks. Ας ξεκινήσουμε με ένα απλό:
+# MAGIC
+# MAGIC ### 📚 Theory
+# MAGIC
+# MAGIC Πριν γράψεις σε Bronze, **assert** ότι το input έχει βασικά properties:
+# MAGIC
+# MAGIC ```python
+# MAGIC from pyspark.sql.functions import col, count, when
+# MAGIC
+# MAGIC def quality_check(df, table_name):
+# MAGIC     """Run basic quality checks. Raises if critical fail."""
+# MAGIC     n_total = df.count()
+# MAGIC     if n_total == 0:
+# MAGIC         raise ValueError(f"❌ {table_name}: empty DataFrame")
+# MAGIC
+# MAGIC     # Check 1 — Required columns
+# MAGIC     required = ["afm"] if "afm" in df.columns else []
+# MAGIC     for c in required:
+# MAGIC         nulls = df.filter(col(c).isNull()).count()
+# MAGIC         null_pct = 100 * nulls / n_total
+# MAGIC         if null_pct > 5:
+# MAGIC             raise ValueError(f"❌ {table_name}.{c}: {null_pct:.1f}% nulls (>5% threshold)")
+# MAGIC         print(f"  ✅ {table_name}.{c}: {null_pct:.1f}% nulls")
+# MAGIC
+# MAGIC     print(f"✅ {table_name}: {n_total} rows passed quality")
+# MAGIC     return df
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Πρόσθεσε `quality_check()` call στη loader function σας. Trigger ένα FAIL εσκεμμένα (π.χ. set null rate threshold σε 0%) και δες τι γίνεται.
+
+# COMMAND ----------
+
+# DBTITLE 1,STRETCH 3 — Quality check
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 🏆 SUPER STRETCH — DESCRIBE HISTORY + Time Travel
+# MAGIC
+# MAGIC Delta tables έχουν **built-in version history**. Production gold για audit/debug.
+# MAGIC
+# MAGIC ### 📚 Reference
+# MAGIC
+# MAGIC ```python
+# MAGIC # See all versions
+# MAGIC display(spark.sql("DESCRIBE HISTORY gt_lab.bronze.taxis_declarations_raw"))
+# MAGIC
+# MAGIC # Read previous version
+# MAGIC df_old = (spark.read
+# MAGIC             .format("delta")
+# MAGIC             .option("versionAsOf", 0)  # ή timestampAsOf
+# MAGIC             .table("gt_lab.bronze.taxis_declarations_raw"))
+# MAGIC
+# MAGIC # Diff: τι άλλαξε μεταξύ versions
+# MAGIC v0 = spark.read.format("delta").option("versionAsOf", 0).table("gt_lab.bronze.taxis_declarations_raw")
+# MAGIC v1 = spark.read.format("delta").option("versionAsOf", 1).table("gt_lab.bronze.taxis_declarations_raw")
+# MAGIC diff = v1.exceptAll(v0)
+# MAGIC display(diff)
+# MAGIC ```
+# MAGIC
+# MAGIC ### ✍️ Δοκίμασε
+# MAGIC
+# MAGIC Τρέξε τη loader function **2 φορές** (πρώτη φορά κανονικά, δεύτερη φορά με `mode("overwrite")`). Μετά:
+# MAGIC 1. `DESCRIBE HISTORY` → πόσες versions έχεις;
+# MAGIC 2. Διάβασε `versionAsOf=0` και count
+# MAGIC 3. Διάβασε current και count
+# MAGIC 4. Πρέπει να είναι ίδιο count (idempotency confirmed via Delta history!)
+
+# COMMAND ----------
+
+# DBTITLE 1,SUPER STRETCH — Delta time travel
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+
+
