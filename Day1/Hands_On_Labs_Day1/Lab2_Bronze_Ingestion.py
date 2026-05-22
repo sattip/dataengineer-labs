@@ -830,79 +830,147 @@ display(spark.table(target_table).limit(5))
 
 # MAGIC %md
 # MAGIC %md
-# MAGIC ## 🌟 Stretch 4 — Data Contract Validator (Production Pattern)
+# MAGIC ---
+# MAGIC # 🧪 STRETCH 4 — Data Contract Validator (Mini-Lab · ⏱ 60 λεπτά)
 # MAGIC
-# MAGIC Ας υλοποιήσεις το data contract pattern για τα δικά σου Bronze tables.
+# MAGIC > **Standalone mini-lab** μέσα στο Lab 2. Αν τελειώσατε νωρίς τα core steps, δουλεύετε αυτό σε groups.
 # MAGIC
-# MAGIC ### Στόχος
+# MAGIC ## 🎯 Goal
 # MAGIC
-# MAGIC 1. Φτιάξε ένα `CONTRACTS` dict με spec για **2 sources** (citizen + taxis)
-# MAGIC 2. Φτιάξε function `validate_contract(df, contract)` που εφαρμόζει 5 checks:
-# MAGIC    - Row count bounds (`min_rows`, `max_rows`)
-# MAGIC    - Required columns υπάρχουν
-# MAGIC    - Non-nullable columns δεν έχουν NULLs
-# MAGIC    - Regex pattern matches (π.χ. AFM 9 digits)
-# MAGIC    - Allowed values (π.χ. region σε whitelist)
-# MAGIC 3. **Integrate** στο `load_to_bronze()` σου — call πριν το write
-# MAGIC 4. **Test failure**: τροποποίησε contract να raise (π.χ. `min_rows=1000`) και verify ότι το pipeline σταματάει
+# MAGIC Να υλοποιήσετε **production-grade contract validation system** για το Bronze ingestion σας:
+# MAGIC - Define contracts για **5 sources** (όχι μόνο 2)
+# MAGIC - Build **comprehensive validator** με 7 check types
+# MAGIC - **Quarantine pattern**: bad records → quarantine table αντί για pipeline crash
+# MAGIC - **Metrics report**: ποιοι έλεγχοι έσπασαν, σε πόσα records
+# MAGIC - **Integrate** στο existing `load_to_bronze()` σας
 # MAGIC
-# MAGIC ### Hints
+# MAGIC ## 📋 Pacing (60' breakdown)
 # MAGIC
-# MAGIC - Δες theory section **2.8 Data Contracts** για το full skeleton
-# MAGIC - Use `df.filter(~col("x").rlike(pattern)).count()` για regex check
-# MAGIC - Use `col("x").isin(allowed_list)` για allowed values check
-# MAGIC - Use `df.filter(col("x").isNull()).count()` για null check
+# MAGIC | Time | Step | Deliverable |
+# MAGIC |---|---|---|
+# MAGIC | 0-10' | **A** — Design 5 contracts | CONTRACTS dict για όλες τις πηγές |
+# MAGIC | 10-25' | **B** — Build validator | `validate_contract()` με 7 checks |
+# MAGIC | 25-35' | **C** — Quarantine pattern | bad records → separate table |
+# MAGIC | 35-45' | **D** — Integrate + test happy path | `load_with_contracts()` |
+# MAGIC | 45-55' | **E** — Break tests + metrics | inject bad data, see what catches |
+# MAGIC | 55-60' | **F** — Discussion | trade-offs με ομάδα |
 # MAGIC
-# MAGIC ### Bonus questions για ομάδα
+# MAGIC ## 🎤 Παρουσίαση (αν χρόνος)
 # MAGIC
-# MAGIC - **Πού** πρέπει να ζει το contract; (Code? YAML? Database? Schema Registry?)
-# MAGIC - **Ποιος** το αλλάζει; (DE? Data Steward? Source team?)
-# MAGIC - **Πότε** trigger-άρει re-validation; (Κάθε ingestion? Schema change? Time-based?)
-# MAGIC - **Πώς** κάνεις versioning; (Git? SemVer? Contract registry?)
+# MAGIC Στο τέλος, 1 ομάδα παρουσιάζει 5':
+# MAGIC - Ποιους checks διάλεξαν;
+# MAGIC - Πώς χειρίστηκαν trade-off **fail-fast** vs **quarantine**;
+# MAGIC - Τι metric ποιότητας θα έβαζαν σε production dashboard;
 
 # COMMAND ----------
 
-# DBTITLE 1,STRETCH 4 — Data Contract Validator
-# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+# MAGIC %md
+# MAGIC ## 📚 Background: Why 1 hour for this?
+# MAGIC
+# MAGIC Στη δουλειά σας, **data quality θα κλέψει το μεγαλύτερο μέρος του χρόνου σας**. Senior DEs ξοδεύουν 60-80% του χρόνου τους σε:
+# MAGIC - Defining what "good data" means (contracts)
+# MAGIC - Catching violations early (validation)
+# MAGIC - Routing bad data σωστά (quarantine, alert, fix-at-source)
+# MAGIC
+# MAGIC Σήμερα θα χτίσετε **mini-version του ίδιου system** που θα δουλέψετε σε production.
+# MAGIC
+# MAGIC ### Production analogue
+# MAGIC
+# MAGIC | What you'll build | Production tool που κάνει το ίδιο |
+# MAGIC |---|---|
+# MAGIC | CONTRACTS dict | dbt YAML schemas, Great Expectations suite, Soda checks |
+# MAGIC | validate_contract() | DLT `@dlt.expect_or_fail`, GE `validate_run()` |
+# MAGIC | quarantine table | DLT bad records, DLQ patterns, Soda failed rows |
+# MAGIC | metrics report | Soda Cloud, Monte Carlo, Datadog DQ dashboards |
+# MAGIC
+# MAGIC ### 7 Validation Check Types
+# MAGIC
+# MAGIC | # | Check | Example | Severity |
+# MAGIC |---|---|---|---|
+# MAGIC | 1 | **Row count bounds** | min=1, max=10M | Critical |
+# MAGIC | 2 | **Required columns exist** | `afm` MUST be present | Critical |
+# MAGIC | 3 | **Non-nullable constraints** | `afm` NOT NULL | Critical |
+# MAGIC | 4 | **Null rate thresholds** | < 2% nulls in `email` | Warning |
+# MAGIC | 5 | **Regex patterns** | AFM = 9 digits | Critical |
+# MAGIC | 6 | **Allowed values (enum)** | region ∈ {ATTICA, ...} | Critical |
+# MAGIC | 7 | **Numeric ranges** | tax_amount ≥ 0 | Critical |
+# MAGIC
+# MAGIC Severity matters: **Critical** → block pipeline. **Warning** → log + alert αλλά continue.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP A (10') — Design 5 Contracts
+# MAGIC
+# MAGIC Define `CONTRACTS` dict για ΟΛΕΣ τις 5 πηγές. Hints:
+# MAGIC
+# MAGIC ### Citizen Registry
+# MAGIC - `afm`: string, NOT NULL, regex `^\d{9}$`
+# MAGIC - `region`: enum [ATTICA, MACEDONIA, CRETE, EPIRUS, THESSALY, PELOPONNESE]
+# MAGIC - `birth_year`: int, range 1900-2026
+# MAGIC - `is_active`: bool, NOT NULL
+# MAGIC - `min_rows`: 1, `max_rows`: 100M
+# MAGIC
+# MAGIC ### TAXIS Declarations
+# MAGIC - `statement_id`: string, NOT NULL (primary key)
+# MAGIC - `afm`: string, NOT NULL, regex 9 digits
+# MAGIC - `fiscal_year`: int, range 2000-2030
+# MAGIC - `tax_amount`: decimal, min ≥ 0
+# MAGIC - `status`: enum [Submitted, Approved, Rejected, Pending]
+# MAGIC
+# MAGIC ### EFKA Contributions
+# MAGIC - `contribution_id`: string, NOT NULL
+# MAGIC - `afm`, `employer_afm`: strings, regex 9 digits, NOT NULL
+# MAGIC - `gross_salary`: decimal, min ≥ 0
+# MAGIC - `employee_contribution`: decimal, min ≥ 0
+# MAGIC - `period`: regex `^\d{4}-\d{2}$` (YYYY-MM)
+# MAGIC
+# MAGIC ### KEP Events
+# MAGIC - `event_id`: string, NOT NULL
+# MAGIC - `citizen_afm`: string, NOT NULL, regex 9 digits
+# MAGIC - `event_type`: enum [REQUEST_CREATED, REQUEST_COMPLETED, REQUEST_FAILED]
+# MAGIC - `wait_minutes`: int, range 0-1440 (max 1 day)
+# MAGIC
+# MAGIC ### myDATA Invoices
+# MAGIC - `invoice_id`: string, NOT NULL
+# MAGIC - `issuer_afm`, `receiver_afm`: regex 9 digits
+# MAGIC - `total_amount`: decimal, NULL allowed (credit notes — δες discussion)
+# MAGIC - `transmission_status`: enum [Accepted, Rejected, Pending]
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP A — CONTRACTS dict (5 sources)
+# 👇 ΓΡΑΨΤΕ ΤΟ ΔΙΚΟ ΣΑΣ CONTRACTS DICT ΕΔΩ
 #
-# Pseudocode skeleton:
+# Pseudocode skeleton (1 source — extend για 5):
 #
-# 1) Define CONTRACTS dict
-#    CONTRACTS = {
-#        "citizen": {
-#            "version": "1.0",
-#            "owner": "registry-team@gov.gr",
-#            "columns": {
-#                "afm":        {"type": "string", "nullable": False, "regex": r"^\d{9}$"},
-#                "is_active":  {"type": "boolean", "nullable": False},
-#                "birth_year": {"type": "integer", "nullable": True, "min": 1900},
-#                # ... add the rest
-#            },
-#            "quality": {
-#                "min_rows": 1,
-#                "max_rows": 100_000_000,
-#                "max_null_pct": {"afm": 0.0}
-#            }
-#        },
-#        "taxis": {
-#            # ... define ως άσκηση
-#        },
-#    }
-#
-# 2) Write validate_contract(df, contract)
-#    - 5 checks (row count, columns, nullable, regex, allowed)
-#    - Raise ValueError on first failure
-#    - Print success summary
-#
-# 3) Integrate σε load_to_bronze:
-#    def load_to_bronze(source, entity, csv_file):
-#        df = spark.read.csv(...)
-#        df = validate_contract(df, CONTRACTS[source])  # ← ΕΔΩ
-#        # ... audit + write
-#
-# 4) Test με 2 πηγές: citizen + taxis. Παρατήρησε αν περνάει.
-#
-# 5) BREAK TEST: αλλάξε min_rows σε 1000. Re-run. Verify exception.
+# CONTRACTS = {
+#     "citizen": {
+#         "version": "1.0",
+#         "owner": "registry-team@gov.gr",
+#         "primary_key": "afm",
+#         "columns": {
+#             "afm":        {"type": "string", "nullable": False,
+#                            "regex": r"^\d{9}$"},
+#             "region":     {"type": "string", "nullable": True,
+#                            "allowed": ["ATTICA", "MACEDONIA", ...]},
+#             "birth_year": {"type": "integer", "nullable": True,
+#                            "min": 1900, "max": 2026},
+#             "is_active":  {"type": "boolean", "nullable": False},
+#         },
+#         "quality": {
+#             "min_rows": 1,
+#             "max_rows": 100_000_000,
+#             "max_null_pct": {"afm": 0.0, "is_active": 0.0,
+#                              "region": 5.0}  # tolerated up to 5% region nulls
+#         }
+#     },
+#     # ... 4 more sources
+# }
+
+CONTRACTS = {
+    # Fill in σύμφωνα με το spec
+}
 
 
 
@@ -911,18 +979,399 @@ display(spark.table(target_table).limit(5))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 🎓 Discussion (after coding)
+# MAGIC ## STEP B (15') — Build `validate_contract()` με 7 checks
 # MAGIC
-# MAGIC Αφού δοκιμάσεις:
+# MAGIC ### Function signature
 # MAGIC
-# MAGIC 1. **Πόσο dependable** είναι αυτό vs ένα DLT expectation;
-# MAGIC    *(Hint: DLT τρέχει το expectation per record στο engine — πιο γρήγορο)*
+# MAGIC ```python
+# MAGIC def validate_contract(df, contract, fail_fast=True):
+# MAGIC     """
+# MAGIC     Validate DataFrame against contract.
 # MAGIC
-# MAGIC 2. **Performance**: Τι αν τρέχεις 5 separate counts ανά column για null check;
-# MAGIC    *(Spoiler: 5 separate scans. Καλύτερο: ένα aggregation με conditional sum)*
+# MAGIC     Args:
+# MAGIC         df: input DataFrame
+# MAGIC         contract: dict με spec
+# MAGIC         fail_fast: αν True, raise σε πρώτο failure.
+# MAGIC                    αν False, accumulate violations σε report.
 # MAGIC
-# MAGIC 3. **Contract evolution**: Αν source προσθέσει νέο column, ποιος ενημερώνει το contract;
-# MAGIC    *(Process: source team → PR στο contracts repo → review → merge → CI deploys)*
+# MAGIC     Returns:
+# MAGIC         (df_valid, df_invalid, report)
+# MAGIC         - df_valid:   records that pass all checks
+# MAGIC         - df_invalid: records that fail (με extra _failure_reason column)
+# MAGIC         - report:     dict με metrics ανά check
+# MAGIC     """
+# MAGIC ```
+# MAGIC
+# MAGIC ### Tips
+# MAGIC
+# MAGIC - Build conditions ως PySpark expressions (`col(x).isNull()`, `col(x).rlike(pat)`)
+# MAGIC - Combine με `&` (AND) και `|` (OR) — όχι Python `and`/`or`
+# MAGIC - Για quarantine, χρησιμοποίησε `when().otherwise()` για να φτιάξεις `_failure_reason`
+# MAGIC - Metrics report = ένα dict με counts ανά check
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP B — validate_contract() implementation
+# 👇 ΓΡΑΨΤΕ ΤΗ FUNCTION ΣΑΣ ΕΔΩ
+#
+# from pyspark.sql.functions import col, when, lit, count
+#
+# def validate_contract(df, contract, fail_fast=True):
+#     report = {"checks": {}, "n_total": df.count(), "n_failures": 0}
+#
+#     # Build invalid_mask ως cumulative OR of all violations
+#     invalid_mask = lit(False)
+#     failure_reasons = []
+#
+#     # Check 1: Row count bounds
+#     # ...
+#
+#     # Check 2: Required columns
+#     for c in contract["columns"]:
+#         if c not in df.columns:
+#             if fail_fast: raise ValueError(...)
+#             else: report["checks"][f"missing_{c}"] = -1
+#
+#     # Check 3: Non-nullable
+#     for c, spec in contract["columns"].items():
+#         if not spec.get("nullable", True):
+#             condition = col(c).isNull()
+#             invalid_mask = invalid_mask | condition
+#             # ... build _failure_reason column
+#
+#     # Check 4: Null rate thresholds
+#     # ...
+#
+#     # Check 5: Regex
+#     for c, spec in contract["columns"].items():
+#         if "regex" in spec:
+#             condition = col(c).isNotNull() & ~col(c).cast("string").rlike(spec["regex"])
+#             invalid_mask = invalid_mask | condition
+#
+#     # Check 6: Allowed values
+#     # ...
+#
+#     # Check 7: Numeric ranges
+#     for c, spec in contract["columns"].items():
+#         if "min" in spec or "max" in spec:
+#             condition = lit(False)
+#             if "min" in spec:
+#                 condition = condition | (col(c) < spec["min"])
+#             if "max" in spec:
+#                 condition = condition | (col(c) > spec["max"])
+#             invalid_mask = invalid_mask | (col(c).isNotNull() & condition)
+#
+#     # Split
+#     df_valid   = df.filter(~invalid_mask)
+#     df_invalid = df.filter(invalid_mask).withColumn("_failure_reason", lit("see report"))
+#
+#     report["n_failures"] = df_invalid.count()
+#     return df_valid, df_invalid, report
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP C (10') — Quarantine Pattern
+# MAGIC
+# MAGIC ### Concept
+# MAGIC
+# MAGIC Αντί για **fail-and-crash**, πιο production-σωστό είναι **fail-and-quarantine**:
+# MAGIC
+# MAGIC ```
+# MAGIC Raw CSV → validate → ┬→ Bronze (clean records)
+# MAGIC                       └→ Quarantine (bad records + _failure_reason)
+# MAGIC ```
+# MAGIC
+# MAGIC ### Quarantine table schema
+# MAGIC
+# MAGIC ```
+# MAGIC gt_lab.bronze.quarantine_{source}_{entity}
+# MAGIC
+# MAGIC Columns:
+# MAGIC   - Όλες οι original columns
+# MAGIC   - _failure_reason  (string, why it failed)
+# MAGIC   - _quarantine_ts   (timestamp)
+# MAGIC   - _pipeline_run_id (για lineage)
+# MAGIC ```
+# MAGIC
+# MAGIC ### Step C — Write quarantine
+# MAGIC
+# MAGIC Φτιάξτε function `write_quarantine(df_invalid, source, entity)` που:
+# MAGIC 1. Adds `_quarantine_ts` + `_pipeline_run_id`
+# MAGIC 2. Writes σε `gt_lab.bronze.quarantine_{source}_{entity}` (append mode — δες γιατί παρακάτω)
+# MAGIC 3. Updates table metadata με last quarantine timestamp
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP C — write_quarantine() implementation
+# 👇 ΓΡΑΨΤΕ ΤΗ FUNCTION ΣΑΣ ΕΔΩ
+#
+# def write_quarantine(df_invalid, source, entity):
+#     if df_invalid.count() == 0:
+#         return  # Nothing to quarantine — clean source
+#
+#     target = f"gt_lab.bronze.quarantine_{source}_{entity}"
+#     df_q = (df_invalid
+#         .withColumn("_quarantine_ts", current_timestamp())
+#         .withColumn("_pipeline_run_id", lit(PIPELINE_RUN_ID))
+#     )
+#     (df_q.write
+#         .format("delta")
+#         .mode("append")  # APPEND γιατί κρατάμε ιστορικό όλων των violations
+#         .option("mergeSchema", "true")
+#         .saveAsTable(target))
+#
+#     n = df_q.count()
+#     print(f"  ⚠️  Quarantined {n} rows → {target}")
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP D (10') — Integrate σε `load_with_contracts()`
+# MAGIC
+# MAGIC Φτιάξτε νέα wrapper function που συνδυάζει όλα:
+# MAGIC
+# MAGIC ```python
+# MAGIC def load_with_contracts(source, entity, csv_filename):
+# MAGIC     """End-to-end loader with contract validation + quarantine."""
+# MAGIC     # 1. Read CSV
+# MAGIC     # 2. Validate (fail_fast=False για quarantine mode)
+# MAGIC     # 3. Write valid → Bronze
+# MAGIC     # 4. Write invalid → Quarantine
+# MAGIC     # 5. Return report
+# MAGIC ```
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP D — load_with_contracts() pipeline
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+#
+# def load_with_contracts(source, entity, csv_filename):
+#     # Read
+#     csv_path = f"{LANDING_PATH}/{csv_filename}"
+#     df = spark.read.option("header","true").csv(csv_path)
+#
+#     # Validate (quarantine mode)
+#     contract = CONTRACTS.get(source)
+#     if not contract:
+#         raise ValueError(f"No contract για {source}")
+#     df_valid, df_invalid, report = validate_contract(df, contract, fail_fast=False)
+#
+#     # Bronze write (valid only)
+#     # ... add audit cols + write
+#
+#     # Quarantine write
+#     write_quarantine(df_invalid, source, entity)
+#
+#     # Report
+#     print(f"
+#     📊 {source}/{entity} report:")
+#     print(f"  Total:        {report['n_total']}")
+#     print(f"  Valid:        {report['n_total'] - report['n_failures']}")
+#     print(f"  Quarantined:  {report['n_failures']}")
+#     return report
+#
+#
+# # Test happy path — όλες οι πηγές
+# for source, entity, csv in [
+#     ("citizen", "registry", "citizen_registry.csv"),
+#     ("taxis",   "declarations", "taxis_declarations.csv"),
+#     ("efka",    "contributions", "efka_contributions.csv"),
+#     ("kep",     "events", "kep_events.csv"),
+#     ("mydata",  "invoices", "mydata_invoices.csv"),
+# ]:
+#     load_with_contracts(source, entity, csv)
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP E (10') — Break Tests + Metrics Report
+# MAGIC
+# MAGIC ### Failure scenarios να test-άρετε
+# MAGIC
+# MAGIC 1. **Inject bad AFM**: στο CSV path φτιάξτε artificial record με 8-digit AFM
+# MAGIC 2. **Out-of-range value**: tax_amount = -500
+# MAGIC 3. **Invalid enum**: status = "PENDING_REVIEW" (not in allowed)
+# MAGIC 4. **Schema break**: αφαιρέστε required column
+# MAGIC
+# MAGIC ### Hints για bad data injection
+# MAGIC
+# MAGIC Δεν χρειάζεται να αλλάξετε CSV. Φτιάξτε artificial DataFrame με `spark.createDataFrame()`:
+# MAGIC
+# MAGIC ```python
+# MAGIC bad_records = spark.createDataFrame([
+# MAGIC     ("BAD1", "12345", 2025, "VAT", 100, -50, "Approved", None, None),
+# MAGIC     ("BAD2", "999999999", 1800, "VAT", 100, 50, "UNKNOWN_STATUS", None, None),
+# MAGIC ], schema=taxis_schema)
+# MAGIC validate_contract(bad_records, CONTRACTS["taxis"], fail_fast=False)
+# MAGIC ```
+# MAGIC
+# MAGIC ### Quarantine table inspection
+# MAGIC
+# MAGIC Μετά τα break tests, query το quarantine για να δεις τι έπιασε:
+# MAGIC
+# MAGIC ```python
+# MAGIC display(spark.table("gt_lab.bronze.quarantine_taxis_declarations"))
+# MAGIC ```
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP E — Break tests
+# 👇 ΓΡΑΨΤΕ TESTS ΕΔΩ
+#
+# Test 1 — Bad AFM (8 digits)
+# bad_afm = spark.createDataFrame([("TX_BAD1", "12345", ...)], schema=...)
+# valid, invalid, report = validate_contract(bad_afm, CONTRACTS["taxis"], fail_fast=False)
+# assert invalid.count() == 1
+#
+# Test 2 — Negative amount
+# ...
+#
+# Test 3 — Invalid enum
+# ...
+#
+# Test 4 — Missing column
+# ...
+
+
+
+
+
+# COMMAND ----------
+
+# DBTITLE 1,STEP E — Build metrics report για όλο το pipeline
+# 👇 ΓΡΑΨΤΕ ΤΟΝ ΚΩΔΙΚΑ ΣΑΣ ΕΔΩ
+#
+# Aggregate quarantine tables → metrics dashboard
+#
+# from pyspark.sql.functions import lit
+#
+# quarantine_tables = [
+#     ("citizen", "gt_lab.bronze.quarantine_citizen_registry"),
+#     ("taxis",   "gt_lab.bronze.quarantine_taxis_declarations"),
+#     # ... 5 total
+# ]
+#
+# metrics = []
+# for source, table in quarantine_tables:
+#     try:
+#         n = spark.table(table).count()
+#         metrics.append((source, n))
+#     except:
+#         metrics.append((source, 0))
+#
+# df_metrics = spark.createDataFrame(metrics, ["source", "quarantined_count"])
+# display(df_metrics)
+
+
+
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP F (5') — Group Discussion
+# MAGIC
+# MAGIC ### Συζητήστε ως ομάδα και ετοιμαστείτε να παρουσιάσετε:
+# MAGIC
+# MAGIC 1. **Fail-fast vs Quarantine**: Πότε επιλέγετε ποιο;
+# MAGIC    - Fail-fast = block pipeline όταν schema break (cardinal)
+# MAGIC    - Quarantine = κρατάμε τα καλά, sideline τα κακά (συνηθέστερο)
+# MAGIC
+# MAGIC 2. **Severity levels**: Όλα critical ή κάποια warning;
+# MAGIC    - π.χ. "tax_amount missing" → critical (block)
+# MAGIC    - π.χ. "full_name has trailing spaces" → warning (log, don't block)
+# MAGIC
+# MAGIC 3. **Contract evolution**: Πώς αλλάζετε contract χωρίς downtime;
+# MAGIC    - Versioning (1.0 → 1.1 backwards-compat, 2.0 breaking)
+# MAGIC    - Migration period (παλιό + νέο parallel)
+# MAGIC
+# MAGIC 4. **Performance**: Έχετε 7 separate column scans. Πώς το βελτιστοποιείτε;
+# MAGIC    - **Single aggregation pass**: όλα τα checks σε ένα `df.agg(...)` query
+# MAGIC    - Spark Catalyst θα τα συνδυάσει σε ένα plan
+# MAGIC
+# MAGIC 5. **Quarantine review process**: Πώς τα bad records ξανα-μπαίνουν στο pipeline;
+# MAGIC    - Manual review από data steward
+# MAGIC    - Automated re-ingestion όταν fixed-at-source
+# MAGIC    - "DLQ replay" pattern (Kafka semantics)
+# MAGIC
+# MAGIC 6. **Alerting**: Ποιες metrics στέλνετε σε production dashboard;
+# MAGIC    - Quarantine rate (% bad records)
+# MAGIC    - Per-check violation counts (which rules trigger most;)
+# MAGIC    - Source-level health score
+# MAGIC    - Trend over time (έχει η ποιότητα του TAXIS βελτιωθεί;)
+# MAGIC
+# MAGIC ### 🎤 Πιθανές ερωτήσεις παρουσίασης
+# MAGIC
+# MAGIC - "Γιατί έβαλες fail_fast=False σε όλα;" — πρέπει να εξηγήσεις tradeoff
+# MAGIC - "Τι γίνεται αν 100% records αποτύχουν;" — alert immediately, source broke
+# MAGIC - "Πώς θα ξέρω αν source άλλαξε schema;" — required columns check + schema_version field
+# MAGIC - "Πόσο σου κοστίζει αυτή η validation;" — extra full scan per source
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## ✅ STEP G — Auto-verification για Stretch 4
+# MAGIC
+# MAGIC Τρέξε αυτό για auto-check:
+
+# COMMAND ----------
+
+# DBTITLE 1,Verification: contract validator
+checks_s4 = []
+
+# Check 1: CONTRACTS dict has 5 entries
+try:
+    n_contracts = len(CONTRACTS)
+    checks_s4.append((f"CONTRACTS dict: {n_contracts} sources", n_contracts >= 5))
+except NameError:
+    checks_s4.append(("CONTRACTS dict defined", False))
+
+# Check 2: validate_contract callable
+try:
+    callable_ok = callable(validate_contract)
+    checks_s4.append(("validate_contract() defined", callable_ok))
+except NameError:
+    checks_s4.append(("validate_contract() defined", False))
+
+# Check 3: Quarantine tables exist
+try:
+    quarantine_tables = [
+        "gt_lab.bronze.quarantine_citizen_registry",
+        "gt_lab.bronze.quarantine_taxis_declarations",
+    ]
+    found = 0
+    for t in quarantine_tables:
+        try:
+            spark.table(t)
+            found += 1
+        except:
+            pass
+    checks_s4.append((f"Quarantine tables: {found}/{len(quarantine_tables)}", found >= 1))
+except:
+    checks_s4.append(("Quarantine tables", False))
+
+print("=" * 60)
+print(" 🧪 STRETCH 4 — Verification")
+print("=" * 60)
+passed = sum(1 for _, ok in checks_s4 if ok)
+for n, ok in checks_s4:
+    print(f"  {'✅' if ok else '❌'} {n}")
+print(f"  {passed}/{len(checks_s4)} passed")
+if passed == len(checks_s4):
+    print("🎉 Stretch 4 ολοκληρώθηκε! Είσαι έτοιμος για παρουσίαση.")
 
 # COMMAND ----------
 

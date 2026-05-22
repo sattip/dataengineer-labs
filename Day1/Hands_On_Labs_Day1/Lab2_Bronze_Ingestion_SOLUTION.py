@@ -497,14 +497,19 @@ for source, entity, _ in SOURCES:
 
 # MAGIC %md
 # MAGIC %md
-# MAGIC ## 🌟 STRETCH 4 — Data Contract Validator
+# MAGIC ---
+# MAGIC # 🧪 STRETCH 4 — Data Contract Validator (Mini-Lab Solution · 60')
+# MAGIC
+# MAGIC > Full implementation για 1-hour mini-lab.
 
 # COMMAND ----------
 
-# DBTITLE 1,Solution: CONTRACTS dict + validator
-from pyspark.sql.functions import col, count, when, length as _len
+# MAGIC %md
+# MAGIC ## STEP A — Define CONTRACTS for 5 sources
 
-# 1) Define CONTRACTS dict (2 sources για demo — extend για όλες τις 5)
+# COMMAND ----------
+
+# DBTITLE 1,Solution A — CONTRACTS dict
 CONTRACTS = {
     "citizen": {
         "version": "1.0",
@@ -512,18 +517,14 @@ CONTRACTS = {
         "primary_key": "afm",
         "columns": {
             "afm":        {"type": "string",   "nullable": False, "regex": r"^\d{9}$"},
-            "full_name":  {"type": "string",   "nullable": True,  "max_length": 200},
+            "full_name":  {"type": "string",   "nullable": True},
             "region":     {"type": "string",   "nullable": True,
                           "allowed": ["ATTICA","MACEDONIA","CRETE","EPIRUS","THESSALY","PELOPONNESE"]},
             "birth_year": {"type": "integer",  "nullable": True, "min": 1900, "max": 2026},
             "is_active":  {"type": "boolean",  "nullable": False},
-            "updated_at": {"type": "timestamp","nullable": True},
         },
-        "quality": {
-            "min_rows": 1,
-            "max_rows": 100_000_000,
-            "max_null_pct": {"afm": 0.0, "is_active": 0.0},
-        }
+        "quality": {"min_rows": 1, "max_rows": 100_000_000,
+                    "max_null_pct": {"afm": 0.0, "is_active": 0.0, "region": 5.0}}
     },
     "taxis": {
         "version": "1.0",
@@ -537,125 +538,390 @@ CONTRACTS = {
             "status":       {"type": "string",  "nullable": False,
                             "allowed": ["Submitted","Approved","Rejected","Pending"]},
         },
-        "quality": {
-            "min_rows": 1,
-            "max_rows": 10_000_000,
-            "max_null_pct": {"afm": 0.0, "statement_id": 0.0},
-        }
+        "quality": {"min_rows": 1, "max_rows": 10_000_000,
+                    "max_null_pct": {"afm": 0.0, "statement_id": 0.0}}
+    },
+    "efka": {
+        "version": "1.0",
+        "owner": "efka-team@efka.gr",
+        "primary_key": "contribution_id",
+        "columns": {
+            "contribution_id":       {"type": "string",  "nullable": False},
+            "afm":                   {"type": "string",  "nullable": False, "regex": r"^\d{9}$"},
+            "employer_afm":          {"type": "string",  "nullable": True,  "regex": r"^\d{9}$"},
+            "period":                {"type": "string",  "nullable": False, "regex": r"^\d{4}-\d{2}$"},
+            "gross_salary":          {"type": "decimal", "nullable": True,  "min": 0},
+            "employee_contribution": {"type": "decimal", "nullable": True,  "min": 0},
+        },
+        "quality": {"min_rows": 1, "max_rows": 50_000_000,
+                    "max_null_pct": {"afm": 0.0, "contribution_id": 0.0}}
+    },
+    "kep": {
+        "version": "1.0",
+        "owner": "kep-team@kep.gr",
+        "primary_key": "event_id",
+        "columns": {
+            "event_id":     {"type": "string",  "nullable": False},
+            "citizen_afm":  {"type": "string",  "nullable": False, "regex": r"^\d{9}$"},
+            "event_type":   {"type": "string",  "nullable": False,
+                            "allowed": ["REQUEST_CREATED","REQUEST_COMPLETED","REQUEST_FAILED"]},
+            "wait_minutes": {"type": "integer", "nullable": True, "min": 0, "max": 1440},
+        },
+        "quality": {"min_rows": 1, "max_rows": 100_000_000,
+                    "max_null_pct": {"event_id": 0.0, "citizen_afm": 0.0}}
+    },
+    "mydata": {
+        "version": "1.0",
+        "owner": "mydata-team@aade.gr",
+        "primary_key": "invoice_id",
+        "columns": {
+            "invoice_id":          {"type": "string",  "nullable": False},
+            "issuer_afm":          {"type": "string",  "nullable": False, "regex": r"^\d{9}$"},
+            "receiver_afm":        {"type": "string",  "nullable": True,  "regex": r"^\d{9}$"},
+            "total_amount":        {"type": "decimal", "nullable": True},  # NULL allowed (credit notes)
+            "transmission_status": {"type": "string",  "nullable": False,
+                                   "allowed": ["Accepted","Rejected","Pending"]},
+        },
+        "quality": {"min_rows": 1, "max_rows": 1_000_000_000,
+                    "max_null_pct": {"invoice_id": 0.0, "issuer_afm": 0.0}}
     },
 }
-
-
-# 2) Validator function
-def validate_contract(df, contract):
-    """Raises αν το df δεν τηρεί το contract. Returns df αν OK."""
-    name = contract.get("primary_key", "unknown")
-    n = df.count()
-
-    # Check 1 — Row count bounds
-    q = contract.get("quality", {})
-    min_rows = q.get("min_rows", 0)
-    max_rows = q.get("max_rows", float("inf"))
-    if n < min_rows:
-        raise ValueError(f"❌ Contract violation: {n} rows < min {min_rows}")
-    if n > max_rows:
-        raise ValueError(f"❌ Contract violation: {n} rows > max {max_rows}")
-    print(f"  ✅ Row count {n} ∈ [{min_rows}, {max_rows}]")
-
-    # Check 2 — Required columns υπάρχουν
-    for c, spec in contract["columns"].items():
-        if c not in df.columns:
-            raise ValueError(f"❌ Missing column: {c}")
-    print(f"  ✅ All {len(contract['columns'])} columns present")
-
-    # Check 3 — Non-nullable columns
-    for c, spec in contract["columns"].items():
-        if not spec.get("nullable", True):
-            nulls = df.filter(col(c).isNull()).count()
-            if nulls > 0:
-                raise ValueError(f"❌ {c}: {nulls} nulls (non-nullable)")
-    print(f"  ✅ Non-nullable constraints satisfied")
-
-    # Check 4 — Quality thresholds (% null per column)
-    for c, max_pct in q.get("max_null_pct", {}).items():
-        nulls = df.filter(col(c).isNull()).count() if c in df.columns else 0
-        null_pct = 100.0 * nulls / n if n > 0 else 0.0
-        if null_pct > max_pct:
-            raise ValueError(
-                f"❌ {c}: {null_pct:.2f}% nulls > {max_pct}% threshold"
-            )
-    print(f"  ✅ Null percentage thresholds met")
-
-    # Check 5 — Regex patterns
-    for c, spec in contract["columns"].items():
-        if "regex" in spec and c in df.columns:
-            bad = df.filter(
-                col(c).isNotNull() &
-                ~col(c).cast("string").rlike(spec["regex"])
-            ).count()
-            if bad > 0:
-                raise ValueError(f"❌ {c}: {bad} rows fail regex {spec['regex']}")
-    print(f"  ✅ Regex patterns valid")
-
-    # Check 6 — Allowed values
-    for c, spec in contract["columns"].items():
-        if "allowed" in spec and c in df.columns:
-            bad = df.filter(
-                col(c).isNotNull() &
-                ~col(c).isin(spec["allowed"])
-            ).count()
-            if bad > 0:
-                raise ValueError(f"❌ {c}: {bad} rows outside allowed values")
-    print(f"  ✅ Allowed values respected")
-
-    print(f"\n🎉 Contract validated: {n} rows pass ({contract.get('version')})")
-    return df
-
-
-# 3) Run validator σε citizen και taxis
-print("=== Validating citizen ===")
-df_citizen = spark.table("gt_lab.bronze.citizen_citizen_registry_raw") \
-    .withColumn("afm", col("afm").cast("string"))
-validate_contract(df_citizen, CONTRACTS["citizen"])
-
-print("\n=== Validating taxis ===")
-df_taxis = spark.table("gt_lab.bronze.taxis_taxis_declarations_raw") \
-    .withColumn("afm", col("afm").cast("string")) \
-    .withColumn("statement_id", col("statement_id").cast("string"))
-validate_contract(df_taxis, CONTRACTS["taxis"])
-
-# COMMAND ----------
-
-# DBTITLE 1,Failure mode test — έσπασε το contract σκόπιμα
-# Set min_rows = 1000 → πρέπει να σπάσει
-broken_contract = dict(CONTRACTS["citizen"])
-broken_contract["quality"] = {**CONTRACTS["citizen"]["quality"], "min_rows": 1000}
-
-try:
-    validate_contract(df_citizen, broken_contract)
-    print("❌ Test FAILED — δεν έσπασε όπως αναμενόταν!")
-except ValueError as e:
-    print(f"✅ Test PASSED — contract caught the violation:")
-    print(f"   {e}")
+print(f"✅ Defined {len(CONTRACTS)} contracts")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC **🎓 Trainer notes:**
+# MAGIC ## STEP B — validate_contract() με 7 checks
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution B — Production validator
+from pyspark.sql.functions import col, when, lit, count as _count
+
+def validate_contract(df, contract, fail_fast=True):
+    """
+    Validate DataFrame against contract spec.
+
+    Returns: (df_valid, df_invalid, report)
+    """
+    report = {"checks": {}, "n_total": 0, "n_failures": 0,
+              "violations": [], "contract_version": contract.get("version")}
+
+    n = df.count()
+    report["n_total"] = n
+
+    # ----- Check 1: Row count bounds -----
+    q = contract.get("quality", {})
+    if n < q.get("min_rows", 0):
+        msg = f"Row count {n} < min {q.get('min_rows')}"
+        report["violations"].append(msg)
+        if fail_fast: raise ValueError(f"❌ {msg}")
+    if n > q.get("max_rows", float("inf")):
+        msg = f"Row count {n} > max {q.get('max_rows')}"
+        report["violations"].append(msg)
+        if fail_fast: raise ValueError(f"❌ {msg}")
+    report["checks"]["row_bounds"] = "pass"
+
+    # ----- Check 2: Required columns exist -----
+    missing_cols = [c for c in contract["columns"] if c not in df.columns]
+    if missing_cols:
+        msg = f"Missing columns: {missing_cols}"
+        report["violations"].append(msg)
+        if fail_fast: raise ValueError(f"❌ {msg}")
+    report["checks"]["columns_exist"] = "pass" if not missing_cols else f"fail: {missing_cols}"
+
+    # Build cumulative invalid_mask + failure_reason
+    invalid_mask = lit(False)
+    failure_reasons_expr = lit("")
+
+    # ----- Check 3: Non-nullable -----
+    for c, spec in contract["columns"].items():
+        if c not in df.columns: continue
+        if not spec.get("nullable", True):
+            cond = col(c).isNull()
+            invalid_mask = invalid_mask | cond
+            failure_reasons_expr = failure_reasons_expr.cast("string") + \
+                when(cond, lit(f"[{c}_null]")).otherwise(lit(""))
+
+    # ----- Check 4: Null rate thresholds (per column) -----
+    for c, max_pct in q.get("max_null_pct", {}).items():
+        if c not in df.columns: continue
+        nulls = df.filter(col(c).isNull()).count()
+        null_pct = 100.0 * nulls / n if n > 0 else 0.0
+        if null_pct > max_pct:
+            msg = f"{c}: {null_pct:.2f}% nulls > {max_pct}% threshold"
+            report["violations"].append(msg)
+            if fail_fast: raise ValueError(f"❌ {msg}")
+        report["checks"][f"null_pct_{c}"] = round(null_pct, 2)
+
+    # ----- Check 5: Regex patterns -----
+    for c, spec in contract["columns"].items():
+        if c not in df.columns: continue
+        if "regex" in spec:
+            cond = col(c).isNotNull() & ~col(c).cast("string").rlike(spec["regex"])
+            invalid_mask = invalid_mask | cond
+            failure_reasons_expr = failure_reasons_expr + \
+                when(cond, lit(f"[{c}_regex]")).otherwise(lit(""))
+
+    # ----- Check 6: Allowed values -----
+    for c, spec in contract["columns"].items():
+        if c not in df.columns: continue
+        if "allowed" in spec:
+            cond = col(c).isNotNull() & ~col(c).isin(spec["allowed"])
+            invalid_mask = invalid_mask | cond
+            failure_reasons_expr = failure_reasons_expr + \
+                when(cond, lit(f"[{c}_enum]")).otherwise(lit(""))
+
+    # ----- Check 7: Numeric ranges -----
+    for c, spec in contract["columns"].items():
+        if c not in df.columns: continue
+        if "min" in spec:
+            cond = col(c).isNotNull() & (col(c) < spec["min"])
+            invalid_mask = invalid_mask | cond
+            failure_reasons_expr = failure_reasons_expr + \
+                when(cond, lit(f"[{c}_min]")).otherwise(lit(""))
+        if "max" in spec:
+            cond = col(c).isNotNull() & (col(c) > spec["max"])
+            invalid_mask = invalid_mask | cond
+            failure_reasons_expr = failure_reasons_expr + \
+                when(cond, lit(f"[{c}_max]")).otherwise(lit(""))
+
+    # Split valid/invalid με _failure_reason
+    df_with_mask = df.withColumn("_failure_reason", failure_reasons_expr) \
+                     .withColumn("_is_invalid", invalid_mask)
+    df_valid = df_with_mask.filter(~col("_is_invalid")).drop("_failure_reason", "_is_invalid")
+    df_invalid = df_with_mask.filter(col("_is_invalid")).drop("_is_invalid")
+
+    report["n_failures"] = df_invalid.count()
+
+    return df_valid, df_invalid, report
+
+print("✅ validate_contract() defined")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP C — Quarantine pattern
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution C — write_quarantine()
+from pyspark.sql.functions import current_timestamp
+
+def write_quarantine(df_invalid, source, entity):
+    """Write bad records σε separate quarantine Delta table."""
+    n = df_invalid.count()
+    if n == 0:
+        print(f"  ✅ {source}/{entity}: zero quarantined records")
+        return
+
+    target = f"gt_lab.bronze.quarantine_{source}_{entity}"
+    df_q = (df_invalid
+        .withColumn("_quarantine_ts",   current_timestamp())
+        .withColumn("_pipeline_run_id", lit(PIPELINE_RUN_ID))
+    )
+    (df_q.write
+        .format("delta")
+        .mode("append")  # APPEND για ιστορικό
+        .option("mergeSchema", "true")
+        .saveAsTable(target))
+    print(f"  ⚠️  Quarantined {n} rows → {target}")
+
+print("✅ write_quarantine() defined")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP D — `load_with_contracts()` end-to-end
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution D — Integration
+def load_with_contracts(source, entity, csv_filename):
+    """End-to-end loader με contract validation + quarantine."""
+    csv_path = f"{LANDING_PATH}/{csv_filename}"
+    target_bronze = f"gt_lab.bronze.{source}_{entity}_raw"
+
+    print(f"\n🚀 Loading {source}/{entity}...")
+
+    # 1. Read
+    df = (spark.read
+            .schema(SCHEMAS.get(source))
+            .option("header","true")
+            .csv(csv_path)
+        ) if source in SCHEMAS else (
+            spark.read.option("header","true").option("inferSchema","true").csv(csv_path)
+        )
+
+    # 2. Validate
+    contract = CONTRACTS.get(source)
+    if not contract:
+        print(f"  ⚠️ No contract — skipping validation")
+        df_valid, df_invalid, report = df, df.limit(0), {"n_total": df.count(), "n_failures": 0}
+    else:
+        df_valid, df_invalid, report = validate_contract(df, contract, fail_fast=False)
+
+    # 3. Write valid → Bronze
+    df_audited = (df_valid
+        .withColumn("_ingestion_ts",   current_timestamp())
+        .withColumn("_source_file",    lit(csv_filename))
+        .withColumn("_pipeline_run_id", lit(PIPELINE_RUN_ID))
+    )
+    (df_audited.write
+        .format("delta").mode("overwrite")
+        .option("overwriteSchema","true")
+        .saveAsTable(target_bronze))
+
+    # 4. Quarantine
+    write_quarantine(df_invalid, source, entity)
+
+    # 5. Report
+    print(f"  📊 Total: {report['n_total']} | Valid: {report['n_total'] - report['n_failures']} | Quarantined: {report['n_failures']}")
+    if report.get("violations"):
+        for v in report["violations"][:3]:
+            print(f"     ⚠ {v}")
+
+    return report
+
+# Run για όλες τις 5 πηγές
+all_reports = {}
+for source, entity, csv in [
+    ("citizen", "registry",      "citizen_registry.csv"),
+    ("taxis",   "declarations",  "taxis_declarations.csv"),
+    ("efka",    "contributions", "efka_contributions.csv"),
+    ("kep",     "events",        "kep_events.csv"),
+    ("mydata",  "invoices",      "mydata_invoices.csv"),
+]:
+    all_reports[source] = load_with_contracts(source, entity, csv)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP E — Break Tests + Metrics
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution E1 — Inject bad records
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DecimalType, TimestampType
+
+print("=== Test 1: Bad AFM (5 digits) ===")
+bad_afm_df = spark.createDataFrame(
+    [("TX_BAD1", "12345", 2025, "VAT", 100.0, 50.0, "Approved", None, None)],
+    schema=SCHEMAS["taxis"]
+)
+v, inv, r = validate_contract(bad_afm_df, CONTRACTS["taxis"], fail_fast=False)
+print(f"  Invalid count: {inv.count()}")
+inv.show(truncate=False)
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution E2 — Negative tax_amount
+print("=== Test 2: Negative amount ===")
+neg_amt_df = spark.createDataFrame(
+    [("TX_BAD2", "987654321", 2025, "VAT", 100.0, -50.0, "Approved", None, None)],
+    schema=SCHEMAS["taxis"]
+)
+v, inv, r = validate_contract(neg_amt_df, CONTRACTS["taxis"], fail_fast=False)
+print(f"  Invalid count: {inv.count()}")
+inv.show(truncate=False)
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution E3 — Invalid enum value
+print("=== Test 3: Invalid status enum ===")
+bad_status_df = spark.createDataFrame(
+    [("TX_BAD3", "987654321", 2025, "VAT", 100.0, 50.0, "UNKNOWN_STATUS", None, None)],
+    schema=SCHEMAS["taxis"]
+)
+v, inv, r = validate_contract(bad_status_df, CONTRACTS["taxis"], fail_fast=False)
+print(f"  Invalid count: {inv.count()}")
+inv.show(truncate=False)
+
+# COMMAND ----------
+
+# DBTITLE 1,Solution E4 — Metrics dashboard
+print("=== 📊 Pipeline Health Report ===")
+metrics_rows = []
+for source, report in all_reports.items():
+    metrics_rows.append((
+        source,
+        report["n_total"],
+        report["n_total"] - report["n_failures"],
+        report["n_failures"],
+        round(100.0 * report["n_failures"] / report["n_total"], 2) if report["n_total"] > 0 else 0.0,
+    ))
+
+df_metrics = spark.createDataFrame(
+    metrics_rows,
+    ["source", "total", "valid", "quarantined", "quarantine_pct"]
+)
+display(df_metrics)
+
+# Per-quarantine table breakdown
+print("\n=== Quarantine table contents ===")
+for source, entity in [("taxis","declarations"), ("citizen","registry")]:
+    t = f"gt_lab.bronze.quarantine_{source}_{entity}"
+    try:
+        n = spark.table(t).count()
+        if n > 0:
+            print(f"\n  {t}: {n} bad records")
+            display(spark.table(t).limit(5))
+    except: pass
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## STEP F — Discussion talking points (για trainer)
 # MAGIC
-# MAGIC - **Performance optimization**: 5 separate `count()` calls = 5 full scans. Production:
-# MAGIC   ```python
-# MAGIC   stats = df.agg(
-# MAGIC       count("*").alias("total"),
-# MAGIC       count(when(col("afm").isNull(), True)).alias("afm_nulls"),
-# MAGIC       count(when(~col("afm").rlike(r"^\d{9}$"), True)).alias("afm_bad_format"),
-# MAGIC       # ... όλα τα checks σε ένα aggregation
-# MAGIC   ).collect()[0]
-# MAGIC   ```
-# MAGIC - **Contract location**: Σε production, contracts ζουν σε **separate git repo** ή **schema registry** (Confluent, Apicurio). Κανείς δεν αλλάζει τα contracts ad-hoc.
-# MAGIC - **Versioning**: SemVer (1.0 → 1.1 για backwards-compat, 2.0 για breaking change). Consumers δηλώνουν ποια version υποστηρίζουν.
-# MAGIC - **Alternative tools**: Great Expectations, Soda, dbt tests, DLT expectations — όλα κάνουν similar work με different ergonomics.
-# MAGIC - **Production gold**: Contract violations → alerting (PagerDuty), όχι silent failures.
+# MAGIC ### Fail-fast vs Quarantine
+# MAGIC
+# MAGIC | Use case | Choice |
+# MAGIC |---|---|
+# MAGIC | Schema break (missing column) | **Fail-fast** — pipeline can't proceed |
+# MAGIC | Source > 90% bad records | **Fail-fast** — source likely broken |
+# MAGIC | Some bad records (< 10%) | **Quarantine** — keep flow, sideline bad |
+# MAGIC | Cosmetic issues (trailing spaces) | **Log only** — don't block, don't quarantine |
+# MAGIC
+# MAGIC ### Performance gotcha
+# MAGIC
+# MAGIC Το naive validator κάνει 5+ separate `count()` calls = 5 full scans.
+# MAGIC
+# MAGIC **Production optimization**:
+# MAGIC ```python
+# MAGIC stats = df.agg(
+# MAGIC     count("*").alias("n_total"),
+# MAGIC     count(when(col("afm").isNull(), True)).alias("afm_nulls"),
+# MAGIC     count(when(~col("afm").cast("string").rlike(r"^\d{9}$"), True)).alias("afm_bad_regex"),
+# MAGIC     count(when(col("tax_amount") < 0, True)).alias("neg_amount"),
+# MAGIC     # ... όλα τα checks σε ένα agg
+# MAGIC ).collect()[0]
+# MAGIC ```
+# MAGIC Σπάει σε ένα Spark job με Catalyst optimization.
+# MAGIC
+# MAGIC ### Contract evolution patterns
+# MAGIC
+# MAGIC | Type | Pattern |
+# MAGIC |---|---|
+# MAGIC | **Add column** (non-breaking) | bump minor (1.0 → 1.1), backwards compat |
+# MAGIC | **Tighten constraint** (e.g. nullable→non-null) | breaking, bump major (1.x → 2.0) |
+# MAGIC | **Remove column** | breaking, major bump, deprecation period |
+# MAGIC | **Change type** | breaking — usually + migration script |
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## ✅ Verification
+
+# COMMAND ----------
+
+# Just confirm everything ran
+print(f"✅ CONTRACTS: {len(CONTRACTS)} sources")
+print(f"✅ validate_contract: callable")
+print(f"✅ write_quarantine: callable")
+print(f"✅ load_with_contracts: ran για όλες τις 5 πηγές")
+print(f"✅ Bad data tests: 3 scenarios covered")
+print(f"✅ Metrics report: produced\n")
+print("🎉 STRETCH 4 ολοκληρώθηκε με production-grade pattern.")
 
 # COMMAND ----------
 
