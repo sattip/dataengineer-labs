@@ -1,0 +1,8 @@
+rule_id,layer,table_name,column_name,rule_type,rule_expression,action_on_fail,severity
+DQ001,Silver,tax_declarations_clean,afm,completeness,afm IS NOT NULL,quarantine,error
+DQ002,Silver,tax_declarations_clean,tax_amount,range,tax_amount >= 0,quarantine,error
+DQ003,Silver,tax_declarations_clean,statement_id,uniqueness,statement_id UNIQUE,deduplicate,warn
+DQ004,Silver,mydata_invoices_clean,total_amount,business_rule,total_amount = net_amount + vat_amount,reject_batch,error
+DQ005,Silver,kep_requests_clean,wait_minutes,range,wait_minutes BETWEEN 0 AND 240,quarantine,warn
+DQ006,Gold,citizen_360,afm,referential_integrity,afm EXISTS IN citizen_registry,reject_batch,error
+DQ007,Gold,tax_kpis,quality_score,threshold,quality_score >= 0.95,alert,error

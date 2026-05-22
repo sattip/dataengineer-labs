@@ -1,0 +1,10 @@
+afm,full_name,region,birth_year,is_active,updated_at
+123456789,George Papadopoulos,Attica,1982,true,2026-01-01 00:00:00
+987654321,Maria Ioannou,Central Macedonia,1978,true,2026-01-01 00:00:00
+456789123,Nikos Konstantinou,Western Greece,1991,true,2026-01-01 00:00:00
+222333444,Eleni Dimitriou,Attica,1969,true,2026-01-01 00:00:00
+333444555,Petros Alexiou,Crete,1988,true,2026-01-01 00:00:00
+444555666,Sofia Vasiliou,Attica,1995,false,2026-01-01 00:00:00
+555666777,Kostas Nikolaou,Thessaly,1972,true,2026-01-01 00:00:00
+666777888,Dimitris Georgiou,Attica,1980,true,2026-01-01 00:00:00
+777888999,Anna Markou,Epirus,1986,true,2026-01-01 00:00:00
