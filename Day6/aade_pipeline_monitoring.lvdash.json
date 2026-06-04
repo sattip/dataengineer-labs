@@ -1,0 +1,328 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpi",
+      "displayName": "KPI summary",
+      "queryLines": [
+        "SELECT * FROM workspace.aade_ops.mon_kpi_summary"
+      ]
+    },
+    {
+      "name": "ds_quality",
+      "displayName": "Quality trend",
+      "queryLines": [
+        "SELECT * FROM workspace.aade_ops.mon_quality_trend ORDER BY run_date"
+      ]
+    },
+    {
+      "name": "ds_business",
+      "displayName": "Tax by region",
+      "queryLines": [
+        "SELECT * FROM workspace.aade_ops.mon_business"
+      ]
+    },
+    {
+      "name": "ds_health",
+      "displayName": "Pipeline runs",
+      "queryLines": [
+        "SELECT * FROM workspace.aade_ops.mon_pipeline_health ORDER BY run_date DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page1",
+      "displayName": "Pipeline Monitoring",
+      "layout": [
+        {
+          "widget": {
+            "name": "w_succ",
+            "queries": [
+              {
+                "name": "main",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "success_rate_pct",
+                      "expression": "`success_rate_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "success_rate_pct",
+                  "displayName": "Success rate %"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_dur",
+            "queries": [
+              {
+                "name": "main",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "avg_duration_sec",
+                      "expression": "`avg_duration_sec`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_duration_sec",
+                  "displayName": "Avg duration (s)"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 0,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_inv",
+            "queries": [
+              {
+                "name": "main",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "avg_invalid_pct",
+                      "expression": "`avg_invalid_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "avg_invalid_pct",
+                  "displayName": "Avg invalid %"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "w_trend",
+            "queries": [
+              {
+                "name": "main",
+                "query": {
+                  "datasetName": "ds_quality",
+                  "fields": [
+                    {
+                      "name": "run_date",
+                      "expression": "`run_date`"
+                    },
+                    {
+                      "name": "invalid_pct",
+                      "expression": "`invalid_pct`"
+                    },
+                    {
+                      "name": "invalid_pct_7d_avg",
+                      "expression": "`invalid_pct_7d_avg`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "frame": {
+                "title": "Invalid % trend",
+                "showTitle": true
+              },
+              "encodings": {
+                "x": {
+                  "fieldName": "run_date",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": {
+                  "fieldName": "invalid_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Invalid %"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_region",
+            "queries": [
+              {
+                "name": "main",
+                "query": {
+                  "datasetName": "ds_business",
+                  "fields": [
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "total_tax",
+                      "expression": "`total_tax`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "frame": {
+                "title": "Φόρος ανά περιφέρεια",
+                "showTitle": true
+              },
+              "encodings": {
+                "x": {
+                  "fieldName": "region",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Περιφέρεια"
+                },
+                "y": {
+                  "fieldName": "total_tax",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Σύνολο φόρου"
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 3,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "w_runs",
+            "queries": [
+              {
+                "name": "main",
+                "query": {
+                  "datasetName": "ds_health",
+                  "fields": [
+                    {
+                      "name": "run_date",
+                      "expression": "`run_date`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "duration_sec",
+                      "expression": "`duration_sec`"
+                    },
+                    {
+                      "name": "rows_quarantined",
+                      "expression": "`rows_quarantined`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "table",
+              "frame": {
+                "title": "Πρόσφατα runs",
+                "showTitle": true
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "run_date",
+                    "displayName": "run_date"
+                  },
+                  {
+                    "fieldName": "status",
+                    "displayName": "status"
+                  },
+                  {
+                    "fieldName": "duration_sec",
+                    "displayName": "duration_sec"
+                  },
+                  {
+                    "fieldName": "rows_quarantined",
+                    "displayName": "rows_quarantined"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ]
+}
+
