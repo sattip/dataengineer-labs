@@ -50,27 +50,47 @@
 Τρέξε με τη σειρά: `00_setup` → `01_extract` → `02_load` → `03_transform` → `04_notify`.
 Defaults: `catalog=workspace`, `run_date=σήμερα`. Θα δεις Silver=200, Quarantine=3, Gold≈ aggregates.
 
-### 2) Ως scheduled Job — UI (3 AM)
-1. **Workflows → Create Job**.
-2. Πρόσθεσε **5 tasks** (Notebook type) με paths τα 5 notebooks και **depends_on** όπως στο DAG.
-3. Σε **κάθε task → Parameters** βάλε τα αντίστοιχα (δες `databricks.yml`).
-   Στο job-level: `run_date = {{job.start_time.iso_date}}`, `run_id = {{job.run_id}}`.
-4. Το `04_notify` → **Advanced → Run if → All done**.
-5. **Schedule → Cron**: `0 0 3 * * ?` · Timezone **Europe/Athens**.
-6. **Notifications → on failure**. **Save → Run now**.
+### 2) Ως scheduled Job — Workspace UI (3 AM) · **το πιο εύκολο για τάξη**
 
-### 3) Ως code — Databricks Asset Bundle (YAML · συνιστάται)
-Το `databricks.yml` ορίζει ολόκληρο τον Job σε **YAML** (schedule, params, DAG, retries).
-Τα `notebook_path` είναι **relative** (`./00_setup.py` …) → ο bundle τα ανεβάζει μόνος του.
+> ⚠️ **Σημαντικό για paths**: στο UI το `notebook_path` είναι **απόλυτο path του workspace**
+> ΧΩΡΙΣ κατάληξη `.py` (τα workspace notebooks δεν έχουν extension), π.χ.
+> `/Workspace/Users/εσύ@org/elt_job/00_setup`.
+> Τα relative `./00_setup.py` του `databricks.yml` δουλεύουν **μόνο** μέσω `databricks bundle deploy` (επιλογή 3) —
+> αν τα βάλεις στο UI παίρνεις **«path is invalid for notebook»**.
+
+**Α) Με το χέρι (χωρίς να πληκτρολογήσεις path — δεν σκάει):**
+1. Import τα 5 notebooks σε έναν φάκελο, π.χ. `Workspace/Users/εσύ/elt_job/`.
+2. **Workflows → Create Job**. Πρόσθεσε **5 tasks** (type **Notebook**).
+3. Σε κάθε task → στο πεδίο **Notebook** πάτα **Browse** και **διάλεξε** το notebook (όχι πληκτρολόγηση path).
+4. Στήσε **Depends on** όπως στο DAG · στο `04_notify` → **Advanced → Run if → All done**.
+5. **Job parameters** (⚙️ δεξιά): `catalog=workspace`, `env=prod`,
+   `run_date={{job.start_time.iso_date}}`, `run_id={{job.run_id}}`,
+   `fail_threshold_pct=5.0`, `fail_on_breach=true`.
+6. **Schedule → Cron** `0 0 3 * * ?` · Timezone **Europe/Athens** · **Notifications → on failure**.
+7. **Save → Run now**.
+
+**Β) Γρήγορα με JSON:** άνοιξε τον (νέο/υπάρχοντα) Job → **⋮ → Edit as JSON** → επικόλλησε το
+`job_ui.json`. **Πριν** το επικολλήσεις, κάνε find-replace το `<YOUR_WORKSPACE_PATH>` με τον φάκελό σου
+(right-click notebook → **Copy → Path**). Σβήσε τη γραμμή `"_comment"`.
+
+### 3) Ως code — Databricks Asset Bundle (YAML · CLI μόνο)
+Το `databricks.yml` είναι **για το `databricks bundle` CLI** — **όχι** για το UI.
+Τα `notebook_path` είναι **relative** (`./00_setup.py` …) και ο bundle τα ανεβάζει μόνος του.
 ```bash
+cd Day6/elt_job            # τρέξε ΑΠΟ τον φάκελο του databricks.yml
 databricks bundle validate
 databricks bundle deploy -t dev          # dev: schedule σε PAUSE, prefix "[dev ...]"
 databricks bundle run elt_aade_nightly -t dev   # τρέξε το τώρα
-# Production (ενεργό schedule 03:00):
-databricks bundle deploy -t prod
+databricks bundle deploy -t prod         # production: ενεργό schedule 03:00
 ```
 > 🧠 Cron `0 0 3 * * ?` = sec=0 min=0 **hour=3** κάθε μέρα. 03:30 → `0 30 3 * * ?`.
-> Με `mode: development` (target `dev`) το schedule μπαίνει αυτόματα σε **PAUSED** — δεν τρέχει κατά λάθος στις δοκιμές.
+> Με `mode: development` (target `dev`) το schedule μπαίνει αυτόματα σε **PAUSED**.
+
+| Πώς φτιάχνεις τον Job | Αρχείο | `notebook_path` |
+|---|---|---|
+| Workspace UI (browse picker) | — | διαλέγεις από λίστα |
+| UI → Edit as JSON | `job_ui.json` | απόλυτο, **χωρίς** `.py` |
+| `databricks bundle` CLI | `databricks.yml` | relative `./xx.py` |
 
 ---
 
