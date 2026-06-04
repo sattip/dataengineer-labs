@@ -203,16 +203,17 @@ display(spark.table("aade_governance.user_role"))
 
 # DBTITLE 1,GRANT read στο analytics + SHOW GRANTS
 # MAGIC %sql
-# MAGIC GRANT USAGE  ON SCHEMA aade_analytics TO `account users`;
-# MAGIC -- (τα aggregates θα μπουν στο Βήμα 6) — δίνουμε USAGE τώρα, SELECT μετά
+# MAGIC -- ⚠️ UC privilege = USE SCHEMA / USE CATALOG (όχι το legacy 'USAGE')
+# MAGIC GRANT USE SCHEMA ON SCHEMA aade_analytics TO `account users`;
+# MAGIC -- (τα aggregates μπαίνουν στο Βήμα 8 — εκεί δίνουμε SELECT)
 # MAGIC SHOW GRANTS ON SCHEMA aade_analytics;
 
 # COMMAND ----------
 
 # DBTITLE 1,Production GRANTs για custom groups (τρέχει αν υπάρχουν τα groups)
 for stmt in [
-    "GRANT USAGE  ON SCHEMA aade_secure    TO `aade_analysts`",
-    "GRANT SELECT ON SCHEMA aade_secure    TO `aade_analysts`",
+    "GRANT USE SCHEMA ON SCHEMA aade_secure TO `aade_analysts`",
+    "GRANT SELECT    ON SCHEMA aade_secure TO `aade_analysts`",
     "GRANT ALL PRIVILEGES ON SCHEMA aade_raw TO `aade_data_engineers`",
     "GRANT SELECT ON SCHEMA aade_raw       TO `aade_auditors`",
 ]:
