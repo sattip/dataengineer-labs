@@ -53,19 +53,24 @@ Defaults: `catalog=workspace`, `run_date=σήμερα`. Θα δεις Silver=200
 ### 2) Ως scheduled Job — UI (3 AM)
 1. **Workflows → Create Job**.
 2. Πρόσθεσε **5 tasks** (Notebook type) με paths τα 5 notebooks και **depends_on** όπως στο DAG.
-3. Σε **κάθε task → Parameters** βάλε τα αντίστοιχα (δες `job_definition.json`).
+3. Σε **κάθε task → Parameters** βάλε τα αντίστοιχα (δες `databricks.yml`).
    Στο job-level: `run_date = {{job.start_time.iso_date}}`, `run_id = {{job.run_id}}`.
 4. Το `04_notify` → **Advanced → Run if → All done**.
 5. **Schedule → Cron**: `0 0 3 * * ?` · Timezone **Europe/Athens**.
 6. **Notifications → on failure**. **Save → Run now**.
 
-### 3) Ως scheduled Job — από JSON (γρήγορο)
-Άνοιξε `job_definition.json`, αντικατέστησε τα `notebook_path` (`/Workspace/Repos/.../Day6/elt_job/...`)
-με τα πραγματικά paths, και:
+### 3) Ως code — Databricks Asset Bundle (YAML · συνιστάται)
+Το `databricks.yml` ορίζει ολόκληρο τον Job σε **YAML** (schedule, params, DAG, retries).
+Τα `notebook_path` είναι **relative** (`./00_setup.py` …) → ο bundle τα ανεβάζει μόνος του.
 ```bash
-databricks jobs create --json @job_definition.json
+databricks bundle validate
+databricks bundle deploy -t dev          # dev: schedule σε PAUSE, prefix "[dev ...]"
+databricks bundle run elt_aade_nightly -t dev   # τρέξε το τώρα
+# Production (ενεργό schedule 03:00):
+databricks bundle deploy -t prod
 ```
 > 🧠 Cron `0 0 3 * * ?` = sec=0 min=0 **hour=3** κάθε μέρα. 03:30 → `0 30 3 * * ?`.
+> Με `mode: development` (target `dev`) το schedule μπαίνει αυτόματα σε **PAUSED** — δεν τρέχει κατά λάθος στις δοκιμές.
 
 ---
 

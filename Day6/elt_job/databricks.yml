@@ -1,0 +1,132 @@
+# Databricks Asset Bundle — Multi-notebook medallion ELT job
+# Deploy:  databricks bundle validate  &&  databricks bundle deploy -t dev
+# Run now: databricks bundle run elt_aade_nightly -t dev
+# Docs:    https://docs.databricks.com/dev-tools/bundles
+
+bundle:
+  name: elt_aade_nightly
+
+# ── Παραμετροποιήσιμες τιμές (override ανά target ή από CLI: --var="catalog=gt_lab") ──
+variables:
+  catalog:
+    description: Unity Catalog (workspace = πάντα υπάρχει σε Free/Serverless)
+    default: workspace
+  notify_email:
+    description: Email για on_failure notifications
+    default: data-oncall@gov.gr
+
+resources:
+  jobs:
+    elt_aade_nightly:
+      name: elt_aade_nightly
+      tags:
+        env: prod
+        team: data-platform
+        pattern: medallion-elt
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+
+      # ── Schedule: κάθε μέρα 03:00 (Europe/Athens) ──
+      schedule:
+        quartz_cron_expression: "0 0 3 * * ?"   # sec min hour day month dow → 03:00:00 daily
+        timezone_id: Europe/Athens
+        pause_status: UNPAUSED
+
+      email_notifications:
+        on_failure:
+          - ${var.notify_email}
+
+      # ── Job parameters (dynamic values: ο Job τα γεμίζει στο runtime) ──
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: env
+          default: prod
+        - name: run_date
+          default: "{{job.start_time.iso_date}}"   # ημερομηνία εκτέλεσης
+        - name: run_id
+          default: "{{job.run_id}}"
+        - name: fail_threshold_pct
+          default: "5.0"
+        - name: fail_on_breach
+          default: "true"
+
+      # ── Το DAG: 00_setup → 01_extract → 02_load → 03_transform → 04_notify ──
+      tasks:
+        - task_key: 00_setup
+          notebook_task:
+            notebook_path: ./00_setup.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+          timeout_seconds: 600
+          max_retries: 1
+
+        - task_key: 01_extract
+          depends_on:
+            - task_key: 00_setup
+          notebook_task:
+            notebook_path: ./01_extract.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+          timeout_seconds: 900
+          max_retries: 2
+          min_retry_interval_millis: 120000
+
+        - task_key: 02_load
+          depends_on:
+            - task_key: 01_extract
+          notebook_task:
+            notebook_path: ./02_load.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+              fail_threshold_pct: "{{job.parameters.fail_threshold_pct}}"
+              fail_on_breach: "{{job.parameters.fail_on_breach}}"
+          timeout_seconds: 1200
+          max_retries: 1
+
+        - task_key: 03_transform
+          depends_on:
+            - task_key: 02_load
+          notebook_task:
+            notebook_path: ./03_transform.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+          timeout_seconds: 1200
+          max_retries: 1
+
+        - task_key: 04_notify
+          depends_on:
+            - task_key: 03_transform
+          run_if: ALL_DONE          # τρέχει ακόμα κι αν upstream απέτυχε → ειδοποιεί για failures
+          notebook_task:
+            notebook_path: ./04_notify.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+              webhook_secret_scope: ""
+              webhook_secret_key: ""
+          timeout_seconds: 300
+          max_retries: 1
+
+# ── Targets: dev (paused, prefixed) / prod (scheduled) ──
+targets:
+  dev:
+    mode: development      # κάνει pause το schedule & prefix "[dev you] " στο όνομα
+    default: true
+  prod:
+    mode: production
+    variables:
+      catalog: workspace
+      notify_email: data-oncall@gov.gr
