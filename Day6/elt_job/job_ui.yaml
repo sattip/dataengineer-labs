@@ -1,0 +1,119 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Databricks Jobs UI — "Switch to code version (YAML)" / "Edit as YAML"
+#
+# Open the Job → kebab menu (⋮) δίπλα στο "Run now" → "Switch to code version (YAML)"
+# → επικόλλησε ΟΛΟ αυτό το αρχείο.
+#
+# ⚠️ ΠΡΙΝ το επικολλήσεις: κάνε find-replace το <YOUR_WORKSPACE_PATH> με τον φάκελο
+#    όπου έκανες import τα 5 notebooks (right-click notebook → Copy → Path).
+#    Τα notebook paths είναι ΑΠΟΛΥΤΑ και ΧΩΡΙΣ κατάληξη .py.
+#    π.χ.  /Workspace/Users/gpittas@obstechnologies.com/elt_job
+#
+# (Για το `databricks bundle` CLI → χρησιμοποίησε το databricks.yml αντί γι' αυτό.)
+# ─────────────────────────────────────────────────────────────────────────────
+resources:
+  jobs:
+    elt_aade_nightly:
+      name: elt_aade_nightly
+      tags:
+        env: prod
+        team: data-platform
+        pattern: medallion-elt
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+
+      schedule:
+        quartz_cron_expression: "0 0 3 * * ?"   # κάθε μέρα 03:00:00
+        timezone_id: Europe/Athens
+        pause_status: UNPAUSED
+
+      email_notifications:
+        on_failure:
+          - data-oncall@gov.gr
+
+      parameters:
+        - name: catalog
+          default: workspace
+        - name: env
+          default: prod
+        - name: run_date
+          default: "{{job.start_time.iso_date}}"
+        - name: run_id
+          default: "{{job.run_id}}"
+        - name: fail_threshold_pct
+          default: "5.0"
+        - name: fail_on_breach
+          default: "true"
+
+      tasks:
+        - task_key: 00_setup
+          notebook_task:
+            notebook_path: <YOUR_WORKSPACE_PATH>/00_setup
+            source: WORKSPACE
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+          timeout_seconds: 600
+          max_retries: 1
+
+        - task_key: 01_extract
+          depends_on:
+            - task_key: 00_setup
+          notebook_task:
+            notebook_path: <YOUR_WORKSPACE_PATH>/01_extract
+            source: WORKSPACE
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+          timeout_seconds: 900
+          max_retries: 2
+          min_retry_interval_millis: 120000
+
+        - task_key: 02_load
+          depends_on:
+            - task_key: 01_extract
+          notebook_task:
+            notebook_path: <YOUR_WORKSPACE_PATH>/02_load
+            source: WORKSPACE
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+              fail_threshold_pct: "{{job.parameters.fail_threshold_pct}}"
+              fail_on_breach: "{{job.parameters.fail_on_breach}}"
+          timeout_seconds: 1200
+          max_retries: 1
+
+        - task_key: 03_transform
+          depends_on:
+            - task_key: 02_load
+          notebook_task:
+            notebook_path: <YOUR_WORKSPACE_PATH>/03_transform
+            source: WORKSPACE
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+          timeout_seconds: 1200
+          max_retries: 1
+
+        - task_key: 04_notify
+          depends_on:
+            - task_key: 03_transform
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: <YOUR_WORKSPACE_PATH>/04_notify
+            source: WORKSPACE
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              env: "{{job.parameters.env}}"
+              run_date: "{{job.parameters.run_date}}"
+              run_id: "{{job.parameters.run_id}}"
+              webhook_secret_scope: ""
+              webhook_secret_key: ""
+          timeout_seconds: 300
+          max_retries: 1

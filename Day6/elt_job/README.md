@@ -69,9 +69,12 @@ Defaults: `catalog=workspace`, `run_date=σήμερα`. Θα δεις Silver=200
 6. **Schedule → Cron** `0 0 3 * * ?` · Timezone **Europe/Athens** · **Notifications → on failure**.
 7. **Save → Run now**.
 
-**Β) Γρήγορα με JSON:** άνοιξε τον (νέο/υπάρχοντα) Job → **⋮ → Edit as JSON** → επικόλλησε το
-`job_ui.json`. **Πριν** το επικολλήσεις, κάνε find-replace το `<YOUR_WORKSPACE_PATH>` με τον φάκελό σου
-(right-click notebook → **Copy → Path**). Σβήσε τη γραμμή `"_comment"`.
+**Β) Γρήγορα με YAML (το νέο UI):** άνοιξε τον Job → **⋮ (δίπλα στο Run now) → Switch to code version (YAML)**
+→ επικόλλησε ΟΛΟ το `job_ui.yaml` (έχει το `resources:` wrapper + `source: WORKSPACE` που θέλει το UI).
+**Πριν**: find-replace το `<YOUR_WORKSPACE_PATH>` με τον φάκελό σου (right-click notebook → **Copy → Path**).
+
+**Γ) Με JSON (παλιότερα UI):** **⋮ → Edit as JSON** → επικόλλησε το `job_ui.json`, ίδιο find-replace,
+σβήσε τη γραμμή `"_comment"`.
 
 ### 3) Ως code — Databricks Asset Bundle (YAML · CLI μόνο)
 Το `databricks.yml` είναι **για το `databricks bundle` CLI** — **όχι** για το UI.
@@ -86,11 +89,12 @@ databricks bundle deploy -t prod         # production: ενεργό schedule 03:
 > 🧠 Cron `0 0 3 * * ?` = sec=0 min=0 **hour=3** κάθε μέρα. 03:30 → `0 30 3 * * ?`.
 > Με `mode: development` (target `dev`) το schedule μπαίνει αυτόματα σε **PAUSED**.
 
-| Πώς φτιάχνεις τον Job | Αρχείο | `notebook_path` |
+| Πώς φτιάχνεις τον Job | Αρχείο | Μορφή / `notebook_path` |
 |---|---|---|
-| Workspace UI (browse picker) | — | διαλέγεις από λίστα |
-| UI → Edit as JSON | `job_ui.json` | απόλυτο, **χωρίς** `.py` |
-| `databricks bundle` CLI | `databricks.yml` | relative `./xx.py` |
+| Workspace UI (browse picker) | — | διαλέγεις από λίστα (no typing) |
+| UI → **Switch to code version (YAML)** | **`job_ui.yaml`** | `resources:` wrapper · απόλυτο, **χωρίς** `.py` · `source: WORKSPACE` |
+| UI → Edit as JSON (παλιό) | `job_ui.json` | flat JSON · απόλυτο, **χωρίς** `.py` |
+| `databricks bundle` CLI | `databricks.yml` | bundle · relative `./xx.py` |
 
 ---
 
