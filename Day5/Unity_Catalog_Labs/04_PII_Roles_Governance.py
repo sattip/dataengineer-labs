@@ -225,33 +225,39 @@ for stmt in [
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 5 — 🎭 Column Masks (PII) — ΠΡΑΓΜΑΤΙΚΑ εφαρμοσμένα
+# MAGIC ## Βήμα 5 — 🎭 Column Masks (PII) με `is_account_group_member`
 # MAGIC
-# MAGIC Φτιάχνουμε masking functions που κοιτάνε τον ρόλο σου, και τις **κολλάμε** στις στήλες με
-# MAGIC `ALTER COLUMN … SET MASK`. Από εδώ και πέρα, **κάθε** query στο table περνά από το mask.
+# MAGIC **Proven UC pattern** (όπως στα `02_Student` / `Day5/Scenario_A`): η masking function ελέγχει
+# MAGIC **group membership** — **χωρίς subquery** (γι' αυτό «κολλάει» αξιόπιστα ως `SET MASK`).
+# MAGIC Ως μέλος του `account admins` βλέπεις πλήρες· ένας non-admin βλέπει masked.
 
 # COMMAND ----------
 
-# DBTITLE 1,Mask functions (ΑΦΜ, IBAN, email, εισόδημα)
+# DBTITLE 1,Mask functions — group-based (account groups)
 # MAGIC %sql
-# MAGIC -- ΑΦΜ: μόνο engineers/admins πλήρες· οι υπόλοιποι τα 4 τελευταία
+# MAGIC -- ΑΦΜ: privileged groups πλήρες· οι υπόλοιποι τα 4 τελευταία
 # MAGIC CREATE OR REPLACE FUNCTION aade_governance.mask_afm(v STRING) RETURNS STRING
-# MAGIC RETURN CASE WHEN aade_governance.my_role() IN ('data_engineer','admin') THEN v
+# MAGIC RETURN CASE WHEN is_account_group_member('account admins')
+# MAGIC               OR is_account_group_member('aade_data_engineers') THEN v
 # MAGIC             ELSE CONCAT('*****', RIGHT(v,4)) END;
 # MAGIC
-# MAGIC -- IBAN: δείξε μόνο χώρα + 4 τελευταία
+# MAGIC -- IBAN: μόνο χώρα + 4 τελευταία
 # MAGIC CREATE OR REPLACE FUNCTION aade_governance.mask_iban(v STRING) RETURNS STRING
-# MAGIC RETURN CASE WHEN aade_governance.my_role() IN ('data_engineer','admin') THEN v
+# MAGIC RETURN CASE WHEN is_account_group_member('account admins')
+# MAGIC               OR is_account_group_member('aade_data_engineers') THEN v
 # MAGIC             ELSE CONCAT(LEFT(v,2), '****', RIGHT(v,4)) END;
 # MAGIC
-# MAGIC -- email: κράτα μόνο 1ο γράμμα + domain
+# MAGIC -- email: 1ο γράμμα + domain
 # MAGIC CREATE OR REPLACE FUNCTION aade_governance.mask_email(v STRING) RETURNS STRING
-# MAGIC RETURN CASE WHEN aade_governance.my_role() IN ('data_engineer','admin') THEN v
+# MAGIC RETURN CASE WHEN is_account_group_member('account admins')
+# MAGIC               OR is_account_group_member('aade_data_engineers') THEN v
 # MAGIC             ELSE CONCAT(LEFT(v,1), '***@', SPLIT(v,'@')[1]) END;
 # MAGIC
-# MAGIC -- εισόδημα: analysts βλέπουν "κλίμακα", auditors/engineers το ακριβές
+# MAGIC -- εισόδημα: auditors/engineers ακριβές· analysts μόνο κλίμακα
 # MAGIC CREATE OR REPLACE FUNCTION aade_governance.mask_income(v DOUBLE) RETURNS STRING
-# MAGIC RETURN CASE WHEN aade_governance.my_role() IN ('data_engineer','admin','auditor') THEN CAST(v AS STRING)
+# MAGIC RETURN CASE WHEN is_account_group_member('account admins')
+# MAGIC               OR is_account_group_member('aade_data_engineers')
+# MAGIC               OR is_account_group_member('aade_auditors') THEN CAST(v AS STRING)
 # MAGIC             WHEN v < 30000 THEN '< 30k' WHEN v < 70000 THEN '30k–70k' ELSE '70k+' END;
 
 # COMMAND ----------
@@ -265,98 +271,85 @@ for stmt in [
 
 # COMMAND ----------
 
-# DBTITLE 1,Δες το αποτέλεσμα (ως data_engineer → πλήρες)
+# DBTITLE 1,Δες το αποτέλεσμα
 # MAGIC %sql
+# MAGIC -- Ως admin/data_engineer → πλήρες. Για live "masked" χωρίς αλλαγή group → Βήμα 7 (dynamic view).
 # MAGIC SELECT afm, name, iban, email, annual_income, region FROM aade_raw.taxpayers ORDER BY afm;
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 6 — 🔀 LIVE DEMO: «Switch role» και ξαναδές
+# MAGIC ## Βήμα 6 — 🧱 Row Filter με `is_account_group_member`
 # MAGIC
-# MAGIC Δεν χρειάζεται δεύτερος χρήστης. Αλλάζουμε **τον δικό σου ρόλο** στο mapping table και
-# MAGIC ξανατρέχουμε το ΙΔΙΟ query — τα masks ενεργοποιούνται αμέσως.
-
-# COMMAND ----------
-
-# DBTITLE 1,Γίνε 'analyst' → ξαναδές (masked!)
-# MAGIC %sql
-# MAGIC UPDATE aade_governance.user_role SET role = 'analyst' WHERE email = current_user();
-# MAGIC SELECT aade_governance.my_role() AS τρέχων_ρόλος;
-
-# COMMAND ----------
-
-# DBTITLE 1,Ίδιο query — τώρα masked + filtered εισόδημα
-# MAGIC %sql
-# MAGIC SELECT afm, name, iban, email, annual_income, region FROM aade_raw.taxpayers ORDER BY afm;
-
-# COMMAND ----------
-
-# DBTITLE 1,Επανέφερε τον ρόλο σου σε data_engineer
-# MAGIC %sql
-# MAGIC UPDATE aade_governance.user_role SET role = 'data_engineer' WHERE email = current_user();
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Βήμα 7 — 🧱 Row Filter — κάθε χρήστης μόνο τις περιφέρειές του
-# MAGIC
-# MAGIC Ένα row filter είναι function που γυρνά `TRUE/FALSE` ανά γραμμή. Κολλάει με
-# MAGIC `SET ROW FILTER … ON (στήλη)`. Χρησιμοποιεί lookup στο `user_region`.
+# MAGIC Το row filter γυρνά `TRUE/FALSE` ανά γραμμή και κολλάει με `SET ROW FILTER … ON (στήλη)`.
+# MAGIC Proven pattern: privileged groups βλέπουν όλες τις γραμμές· οι υπόλοιποι περιορίζονται
+# MAGIC (εδώ: μόνο `Αττική` — σε production lookup table `user → regions`).
 
 # COMMAND ----------
 
 # DBTITLE 1,Row filter function + apply
 # MAGIC %sql
 # MAGIC CREATE OR REPLACE FUNCTION aade_governance.region_filter(region STRING) RETURNS BOOLEAN
-# MAGIC RETURN
-# MAGIC   aade_governance.my_role() IN ('data_engineer','admin','auditor')   -- αυτοί βλέπουν όλες
-# MAGIC   OR EXISTS (SELECT 1 FROM aade_governance.user_region ur
-# MAGIC              WHERE ur.email = current_user() AND ur.region = region);
+# MAGIC RETURN is_account_group_member('account admins')
+# MAGIC     OR is_account_group_member('aade_data_engineers')
+# MAGIC     OR is_account_group_member('aade_auditors')
+# MAGIC     OR region = 'Αττική';
 # MAGIC
 # MAGIC ALTER TABLE aade_raw.taxpayers SET ROW FILTER aade_governance.region_filter ON (region);
-
-# COMMAND ----------
-
-# DBTITLE 1,Ως analyst → μόνο οι δικές του περιφέρειες
-# MAGIC %sql
-# MAGIC UPDATE aade_governance.user_role SET role = 'analyst' WHERE email = current_user();
-# MAGIC -- εσύ είσαι mapped σε: Αττική, Κρήτης → θα δεις ΜΟΝΟ αυτές
 # MAGIC SELECT name, region, doy FROM aade_raw.taxpayers ORDER BY region;
 
 # COMMAND ----------
 
-# DBTITLE 1,Πρόσθεσε μια περιφέρεια στον εαυτό σου → εμφανίζεται αμέσως
-# MAGIC %sql
-# MAGIC INSERT INTO aade_governance.user_region VALUES (current_user(), 'Αττική');  -- ήδη υπάρχει; ok
-# MAGIC INSERT INTO aade_governance.user_region VALUES (current_user(), 'Ιονίων Νήσων');
-# MAGIC SELECT name, region FROM aade_raw.taxpayers ORDER BY region;
+# MAGIC %md
+# MAGIC ## Βήμα 7 — 🔀 LIVE DEMO: Dynamic View + «switch role» (χωρίς 2ο χρήστη)
+# MAGIC
+# MAGIC Τα `SET MASK`/`ROW FILTER` βασίζονται σε **groups** → δεν αλλάζουν live μέσα στο notebook
+# MAGIC (δεν αλλάζεις group με SQL). Για **ζωντανό** demo χρησιμοποιούμε **dynamic view**: μέσα σε view
+# MAGIC επιτρέπεται `current_user()` + subquery, οπότε αλλάζεις τον **δικό σου ρόλο** στο mapping table
+# MAGIC και ξαναβλέπεις την ΙΔΙΑ view masked/πλήρη.
+# MAGIC
+# MAGIC > 💡 Τα masks του Βήματος 5 **προπαγανδίζονται** στη view (masks propagate). Ως admin βλέπεις
+# MAGIC > τα raw values, άρα το `CASE` της view κάνει το masking → το toggle δουλεύει για σένα.
 
 # COMMAND ----------
 
-# DBTITLE 1,Reset σε data_engineer (βλέπεις πάλι όλες)
+# DBTITLE 1,Dynamic role-aware view (μέσω mapping + current_user)
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE VIEW aade_secure.taxpayers_v AS
+# MAGIC SELECT
+# MAGIC   CASE WHEN aade_governance.my_role() IN ('data_engineer','admin') THEN afm
+# MAGIC        ELSE CONCAT('*****', RIGHT(afm,4)) END               AS afm,
+# MAGIC   name, region, doy, sector,
+# MAGIC   CASE WHEN aade_governance.my_role() IN ('data_engineer','admin','auditor')
+# MAGIC        THEN CAST(annual_income AS STRING) ELSE 'κρυφό' END  AS annual_income
+# MAGIC FROM aade_raw.taxpayers;
+# MAGIC SELECT * FROM aade_secure.taxpayers_v ORDER BY name;
+
+# COMMAND ----------
+
+# DBTITLE 1,Γίνε 'analyst' → ξαναδές την ΙΔΙΑ view (masked!)
+# MAGIC %sql
+# MAGIC UPDATE aade_governance.user_role SET role = 'analyst' WHERE email = current_user();
+# MAGIC SELECT * FROM aade_secure.taxpayers_v ORDER BY name;
+
+# COMMAND ----------
+
+# DBTITLE 1,Reset σε data_engineer
 # MAGIC %sql
 # MAGIC UPDATE aade_governance.user_role SET role = 'data_engineer' WHERE email = current_user();
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Βήμα 8 — Εναλλακτική: Dynamic View (όταν δεν θες masks στο base table)
+# MAGIC ## Βήμα 8 — Analytics aggregate + GRANT chain (catalog→schema→view)
 # MAGIC
-# MAGIC Αν δεν θες να αγγίξεις το raw table, χτίζεις **secure view** με τη λογική masking μέσα της.
-# MAGIC Οι analysts παίρνουν GRANT μόνο στη view — ποτέ στο raw.
+# MAGIC Τα aggregates δεν έχουν PII → ασφαλή να μοιραστούν. Πλήρης UC GRANT chain (όπως στο `02_Student`):
+# MAGIC `USE CATALOG → USE SCHEMA → SELECT ON VIEW` (όχι το legacy `USAGE`).
 
 # COMMAND ----------
 
-# DBTITLE 1,Secure view + analytics aggregate
+# DBTITLE 1,Aggregate view + proper UC grant chain
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE VIEW aade_secure.taxpayers_v AS
-# MAGIC SELECT
-# MAGIC   CASE WHEN aade_governance.my_role() IN ('data_engineer','admin') THEN afm
-# MAGIC        ELSE CONCAT('*****', RIGHT(afm,4)) END AS afm,
-# MAGIC   name, region, doy, sector
-# MAGIC FROM aade_raw.taxpayers;
-# MAGIC
 # MAGIC CREATE OR REPLACE VIEW aade_analytics.regional_summary AS
 # MAGIC SELECT t.region, d.tax_category,
 # MAGIC        COUNT(*) AS declarations,
@@ -364,7 +357,9 @@ for stmt in [
 # MAGIC FROM aade_raw.declarations d JOIN aade_raw.taxpayers t ON d.afm = t.afm
 # MAGIC GROUP BY t.region, d.tax_category;
 # MAGIC
-# MAGIC GRANT SELECT ON SCHEMA aade_analytics TO `account users`;   -- aggregates = ασφαλή να μοιραστούν
+# MAGIC GRANT USE CATALOG ON CATALOG workspace                       TO `account users`;
+# MAGIC GRANT USE SCHEMA  ON SCHEMA  aade_analytics                  TO `account users`;
+# MAGIC GRANT SELECT      ON VIEW    aade_analytics.regional_summary TO `account users`;
 # MAGIC SELECT * FROM aade_analytics.regional_summary ORDER BY total_amount DESC;
 
 # COMMAND ----------
@@ -411,10 +406,10 @@ except Exception as e:
 
 # DBTITLE 1,TODO — mask για το phone
 # MAGIC %sql
-# MAGIC -- TODO 1: φτιάξε function aade_governance.mask_phone(v STRING)
-# MAGIC --         engineers/admins → πλήρες, αλλιώς → CONCAT('*******', RIGHT(v,3))
+# MAGIC -- TODO 1: φτιάξε function aade_governance.mask_phone(v STRING) με is_account_group_member
+# MAGIC --         privileged groups → πλήρες, αλλιώς → CONCAT('*******', RIGHT(v,3))
 # MAGIC -- CREATE OR REPLACE FUNCTION aade_governance.mask_phone(v STRING) RETURNS STRING
-# MAGIC -- RETURN ____ ;
+# MAGIC -- RETURN CASE WHEN is_account_group_member('____') THEN v ELSE ____ END;
 # MAGIC
 # MAGIC -- TODO 2: κόλλα το mask στη στήλη phone
 # MAGIC -- ALTER TABLE aade_raw.taxpayers ALTER COLUMN phone SET MASK ____ ;
@@ -465,7 +460,8 @@ for r in expired:
 # MAGIC **Λύση Βήματος 10:**
 # MAGIC ```sql
 # MAGIC CREATE OR REPLACE FUNCTION aade_governance.mask_phone(v STRING) RETURNS STRING
-# MAGIC RETURN CASE WHEN aade_governance.my_role() IN ('data_engineer','admin') THEN v
+# MAGIC RETURN CASE WHEN is_account_group_member('account admins')
+# MAGIC               OR is_account_group_member('aade_data_engineers') THEN v
 # MAGIC             ELSE CONCAT('*******', RIGHT(v,3)) END;
 # MAGIC ALTER TABLE aade_raw.taxpayers ALTER COLUMN phone SET MASK aade_governance.mask_phone;
 # MAGIC ```
