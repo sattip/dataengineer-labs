@@ -4,8 +4,17 @@
 
 # COMMAND ----------
 
-import time
-from pyspark.sql.functions import col, broadcast, count, sum as spark_sum, avg, current_timestamp, lit
+import time, io, contextlib
+from pyspark.sql.functions import col, broadcast, count, sum as spark_sum, avg, current_timestamp, lit, spark_partition_id
+
+def num_partitions(df):  # serverless-safe (χωρίς RDD)
+    return df.select(spark_partition_id().alias("_pid")).distinct().count()
+
+def get_plan(df):        # serverless-safe (χωρίς _jdf)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        df.explain(mode="formatted")
+    return buf.getvalue()
 
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
 FACT, DIM, PARTED, PERFLOG = ("workspace.aade.perf_requests_fact","workspace.aade.perf_regions_dim",
@@ -31,8 +40,8 @@ def timed(step, fn):
 
 # TODO 1 — repartition / coalesce
 base = spark.table(FACT)
-rep = base.repartition(16); n_rep = rep.rdd.getNumPartitions()
-col4 = rep.coalesce(4);     n_col = col4.rdd.getNumPartitions()
+rep = base.repartition(16); n_rep = num_partitions(rep)
+col4 = rep.coalesce(4);     n_col = num_partitions(col4)
 print(n_rep, n_col)
 
 # COMMAND ----------
@@ -40,8 +49,7 @@ print(n_rep, n_col)
 # TODO 2 — broadcast join
 dim = spark.table(DIM)
 joined = spark.table(FACT).join(broadcast(dim), on="region_id", how="left")
-plan = joined._jdf.queryExecution().executedPlan().toString()
-has_broadcast = "BroadcastHashJoin" in plan
+has_broadcast = "BroadcastHashJoin" in get_plan(joined)
 print("BroadcastHashJoin:", has_broadcast)
 
 # COMMAND ----------

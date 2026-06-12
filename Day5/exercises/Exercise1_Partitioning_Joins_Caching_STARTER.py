@@ -29,8 +29,20 @@
 
 # COMMAND ----------
 
-import time
-from pyspark.sql.functions import col, broadcast, count, sum as spark_sum, avg, current_timestamp, lit
+import time, io, contextlib
+from pyspark.sql.functions import col, broadcast, count, sum as spark_sum, avg, current_timestamp, lit, spark_partition_id
+
+# --- Serverless-safe helpers (χωρίς RDD / _jdf) ---
+def num_partitions(df):
+    """Πλήθος partitions χωρίς RDD (το .rdd ΔΕΝ επιτρέπεται σε serverless)."""
+    return df.select(spark_partition_id().alias("_pid")).distinct().count()
+
+def get_plan(df):
+    """Πιάνει το physical plan ως string μέσω explain() (serverless-safe)."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        df.explain(mode="formatted")
+    return buf.getvalue()
 
 spark.sql("CREATE SCHEMA IF NOT EXISTS workspace.aade")
 FACT   = "workspace.aade.perf_requests_fact"
@@ -71,7 +83,9 @@ print(f"✓ Fact={spark.table(FACT).count():,} · Dim={spark.table(DIM).count()}
 # MAGIC - **`repartition(n)`** — αλλάζει σε **ακριβώς n** partitions· κάνει **full shuffle** (ακριβό αλλά ισορροπημένο).
 # MAGIC - **`coalesce(n)`** — **μειώνει** partitions **χωρίς** full shuffle (φθηνό, για να μαζέψεις μικρά).
 # MAGIC
-# MAGIC `df.rdd.getNumPartitions()` δείχνει το τρέχον πλήθος.
+# MAGIC `num_partitions(df)` (helper, serverless-safe) δείχνει το τρέχον πλήθος.
+# MAGIC > ⚠️ Σε **serverless** το `df.rdd.getNumPartitions()` ΔΕΝ επιτρέπεται (RDD API). Γι' αυτό
+# MAGIC > μετράμε με τη `spark_partition_id()` μέσα στον helper `num_partitions()`.
 
 # COMMAND ----------
 
@@ -81,16 +95,16 @@ print(f"✓ Fact={spark.table(FACT).count():,} · Dim={spark.table(DIM).count()}
 # COMMAND ----------
 
 base = spark.table(FACT)
-print(f"Αρχικά partitions: {base.rdd.getNumPartitions()}")
+print(f"Αρχικά partitions: {num_partitions(base)}")
 
 # 1a: ξανα-διαμοίρασε σε ΑΚΡΙΒΩΣ 16 partitions (full shuffle)
 rep = base.____________(16)                       # TODO 1a: repartition
-n_rep = rep.rdd.getNumPartitions()
+n_rep = num_partitions(rep)
 print(f"Μετά repartition(16): {n_rep}")
 
 # 1b: μείωσε σε 4 partitions ΧΩΡΙΣ full shuffle
 col4 = rep.____________(4)                         # TODO 1b: coalesce
-n_col = col4.rdd.getNumPartitions()
+n_col = num_partitions(col4)
 print(f"Μετά coalesce(4): {n_col}")
 
 # COMMAND ----------
@@ -115,15 +129,14 @@ dim = spark.table(DIM)
 # 2a: κάνε join με broadcast hint στο μικρό dim
 joined = spark.table(FACT).join(____________(dim), on="__________", how="____")   # TODO 2a: broadcast · 2b: "region_id" · 2c: "left"
 
-# 2b: δες το physical plan
-plan = joined._jdf.queryExecution().executedPlan().toString()
+# 2b: δες το physical plan (serverless-safe μέσω explain)
+plan = get_plan(joined)
 has_broadcast = "BroadcastHashJoin" in plan
 print(f"Plan περιέχει BroadcastHashJoin; → {has_broadcast}")
 
 # σύγκριση: χωρίς broadcast (default)
 plain = spark.table(FACT).join(dim, on="region_id", how="left")
-plain_plan = plain._jdf.queryExecution().executedPlan().toString()
-print(f"Default join → BroadcastHashJoin; {('BroadcastHashJoin' in plain_plan)} (μπορεί να το επιλέξει αυτόματα ο AQE)")
+print(f"Default join → BroadcastHashJoin; {('BroadcastHashJoin' in get_plan(plain))} (μπορεί να το επιλέξει αυτόματα ο AQE)")
 
 # COMMAND ----------
 
@@ -181,7 +194,7 @@ print(f"partitionColumns = {detail['partitionColumns']}")
 
 # 4c: query με φίλτρο — δες partition pruning στο plan
 one_region = spark.table(PARTED).filter(col("region_name") == "________")   # TODO 4b: "Αττική" (partition pruning)
-pruned_plan = one_region._jdf.queryExecution().executedPlan().toString()
+pruned_plan = get_plan(one_region)
 print("PartitionFilters στο plan;", "PartitionFilters" in pruned_plan or "region_name" in pruned_plan)
 print(f"Γραμμές Αττικής: {one_region.count():,}")
 
