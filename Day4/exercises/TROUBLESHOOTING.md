@@ -13,15 +13,19 @@
 | Append schema mismatch (Μέρος 3) | Νέες γραμμές με λάθος schema | Φτιάξτε τις από υπάρχουσες (`spark.table(SRC).filter(...).withColumn(...)`) ώστε να ταιριάζει. |
 | `mergeSchema` / missing columns σε append | DataFrame με υποσύνολο στηλών | Είτε δώστε όλες τις στήλες, είτε `.option("mergeSchema","true")` (για ΝΕΕΣ στήλες, όχι missing). |
 | Auto Loader σε Free Edition δεν τρέχει | Σπάνιο — περιορισμός runtime | Fallback: `spark.read.format("csv")` σε loop με watermark (Μέρος 1 pattern). |
-| `_rescued_data` column εμφανίζεται | Auto Loader βάζει εκεί ό,τι δεν ταίριαξε στο schema | Φυσιολογικό· περιέχει «διασωθέντα» πεδία. Αγνοήστε ή κάντε drop. |
-| SCD2: λάθος αριθμός versions | Λάθος `mergeKey`/flags | insert rows: `mergeKey = None`· match: `is_current = true`· close: `is_current=false`· new: `is_current=true`. |
+| `_rescued_data` column εμφανίζεται | Auto Loader βάζει εκεί ό,τι δεν ταίριαξε στο schema | Φυσιολογικό· περιέχει «διασωθέντα» πεδία. |
+| Schema drift (batch 3) **σπάει** το stream | `schemaEvolutionMode` λάθος | Με `"rescue"` η νέα στήλη πάει στο `_rescued_data` χωρίς να σπάσει. Με `"addNewColumns"` (default) το stream σταματά μία φορά και ξανατρέχει. |
+| Audit log έχει λάθος totals | `log_load` δεν κλήθηκε ή λάθος `mode` | Το `log_load` κάνει `append` στο `etl_audit_log` μετά από κάθε φόρτωση. |
+| SCD2: λάθος αριθμός versions | Λάθος `mergeKey`/flags/version | insert rows: `mergeKey = None`· match: `is_current=true`· close: `is_current=false`· new version: `is_current=true`, `version = old+1`. |
+| SCD2: id με μόνο wait-change δεν πιάστηκε | Ξεχάσατε το OR στο change-detection | Ανίχνευση σε **όλα** τα tracked πεδία: `audit_outcome <> ... OR wait_time_minutes <> ...`. |
 | Ελληνικά «σπασμένα» | Encoding | UTF-8· το `display()` τα δείχνει σωστά. |
 
 ## 🧹 Reset (καθαρό ξεκίνημα)
 
 ```python
-for t in ["kep_requests_src","kep_bronze_full","kep_bronze_incr","kep_watermark",
-          "kep_bronze_autoloader","kep_stream_src","kep_silver_stream","dim_request_scd2"]:
+for t in ["kep_requests_src","kep_bronze_full","kep_bronze_incr","kep_watermark","etl_audit_log",
+          "kep_bronze_autoloader","kep_silver_by_service","kep_stream_src","kep_silver_stream",
+          "kep_gold_service_live","kep_stream_batchlog","dim_request_scd2"]:
     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
 for p in ["kep_landing","_schemas/kep_autoloader","_checkpoints/kep_autoloader","_checkpoints/kep_silver_stream"]:
     dbutils.fs.rm(f"/Volumes/workspace/aade/aade_data/{p}", recurse=True)
