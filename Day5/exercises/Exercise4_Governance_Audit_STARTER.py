@@ -216,7 +216,7 @@ print("🎉🎉 ΟΛΟΚΛΗΡΩΣΑΤΕ ΟΛΗ ΤΗΝ ΑΣΚΗΣΗ DAY 5!" if a
 # MAGIC ```
 # MAGIC **Cleanup (προαιρετικό):**
 # MAGIC ```python
-# MAGIC # for t in ["perf_requests_fact","perf_regions_dim","perf_requests_partitioned","perf_log",
+# MAGIC # for t in ["perf_requests_fact","perf_regions_dim","perf_requests_partitioned","perf_log","perf_agg_materialized",
 # MAGIC #           "skew_fact","pii_declarations","pii_declarations_masked","pii_declarations_myregion",
 # MAGIC #           "gov_revenue_by_region"]:
 # MAGIC #     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
