@@ -33,15 +33,19 @@ Self-check → όλα `✅ OK`, `🎉 Τέλος Μέρους 2!`
 
 ---
 
-## Μέρος 3 — Streaming + foreachBatch (~14 TODOs)
+## Μέρος 3 — Streaming + foreachBatch (~15 TODOs)
+
+Ο επεξεργαστής micro-batch κάνει 4 πράγματα: **DQ split → dedup → MERGE → Gold + metrics**.
 
 | Βήμα | Αποτέλεσμα |
 |---|---|
-| Run 1 | Silver = **10.000**· Gold = **5** service types· batch log γράφει |
-| Append (id=5 update + 2 versions του 10001) → Run 2 | Silver = **10.001** |
+| Run 1 | Silver = **10.000**· Gold = **5** service types (με `pct_flagged`)· batch log γράφει |
+| Append (id=5 update + 2 versions του 10001 + **1 κακή** id=10002 `audit_outcome="???"`) → Run 2 | Silver = **10.001** |
+| **DQ / Quarantine** | η κακή (10002) πάει **quarantine**, ΟΧΙ στο Silver (Silver count=0 για 10002, quarantine≥1) |
 | **Dedup μέσα στο batch** | id=10001 κρατά τη **νέα** version → `rejected` |
 | Run 3 (no new data) | Silver = **10.001** (idempotent — exactly-once) |
 | Διπλοεγγραφές request_id | **0** |
+| Gold | έχει `total_requests, avg_wait_min, flagged, rejected, pct_flagged` |
 
 Self-check → όλα `✅ OK`, `🎉 Τέλος Μέρους 3!`
 
@@ -71,4 +75,4 @@ Self-check → όλα `✅ OK`, `🏆 BONUS ΟΛΟΚΛΗΡΩΘΗΚΕ`.
 
 `kep_requests_src`, `kep_bronze_full`, `kep_bronze_incr`, `kep_watermark`, `etl_audit_log`,
 `kep_bronze_autoloader`, `kep_silver_by_service`, `kep_stream_src`, `kep_silver_stream`,
-`kep_gold_service_live`, `kep_stream_batchlog`, `dim_request_scd2`.
+`kep_stream_quarantine`, `kep_gold_service_live`, `kep_stream_batchlog`, `dim_request_scd2`.

@@ -2,7 +2,7 @@
 
 **Οδηγός διευκόλυνσης** + **hints ανά TODO**. Φιλοσοφία: **🧠 ΕΝΝΟΙΑ → ✍️ TODO → self-check**.
 
-> 4 notebooks · **~4.5 ώρες** (~57 TODOs συνολικά). Μαζί με την Ημέρα 3 (~3h) = **6ωρο+ Day 3+4**.
+> 4 notebooks · **~4.5 ώρες** (~58 TODOs συνολικά). Μαζί με την Ημέρα 3 (~3h) = **6ωρο+ Day 3+4**.
 
 ---
 
@@ -48,19 +48,28 @@
 
 ---
 
-# 🟢 ΜΕΡΟΣ 3 — Streaming + foreachBatch (~70', ~14 TODOs)
+# 🟢 ΜΕΡΟΣ 3 — Streaming + foreachBatch (~75', ~15 TODOs)
 
 | TODO | Hint |
 |---|---|
-| 1 | `delta` |
-| 2a–2e | `desc` · `1` (rn==1) · `MATCHED` · `NOT MATCHED` · `overwrite` (Gold) |
-| 3a/3b | `process_batch` · `availableNow` |
-| 4 | `CKPT` (ίδιο → idempotent) |
+| 1 | `delta` (streaming read) |
+| 2a | `isin` (DQ: έγκυρα audit_outcome) |
+| 2b | `append` (quarantine write) |
+| 2c/2d | `request_id` · `desc` (Window dedup) |
+| 2e | `1` (rn==1) |
+| 2f/2g | `MATCHED` · `NOT MATCHED` (MERGE) |
+| 2h | `service_type` (Gold groupBy) |
+| 2i | `"flagged"` (conditional count) |
+| 2j | `overwrite` (Gold write) |
+| 3a/3b | `process_batch` · `availableNow` (Run 1) |
+| 4a/4b/4c | `delta` · `process_batch` · `CKPT` (Run 2) |
+| 5 | `CKPT` (Run 3 — ίδιο → idempotent) |
 
-**✅ Expected:** run1=10k, run2=10.001, run3=10.001 (idempotent)· dedup κρατά νέα id10001· Gold=5· 0 dupes.
+**✅ Expected:** run1=10k, run2=10.001, run3=10.001 (idempotent)· κακή id=10002 → **quarantine** (όχι Silver)·
+dedup κρατά νέα id10001· Gold=5 με `pct_flagged`· 0 dupes.
 
-> 🧑‍🏫 **Tip:** το `foreachBatch` κάνει 4 πράγματα: dedup → MERGE → Gold → metrics. Run 3 (no data)
-> αποδεικνύει exactly-once.
+> 🧑‍🏫 **Tip:** ο επεξεργαστής batch κάνει **4** πράγματα: **DQ split → dedup → MERGE → Gold+metrics**.
+> Δείξε ότι η «κακή» γραμμή πάει quarantine (τίποτα δεν χάνεται σιωπηλά). Run 3 (no data) = exactly-once.
 
 ---
 
@@ -90,7 +99,7 @@
 ```python
 for t in ["kep_requests_src","kep_bronze_full","kep_bronze_incr","kep_watermark","etl_audit_log",
           "kep_bronze_autoloader","kep_silver_by_service","kep_stream_src","kep_silver_stream",
-          "kep_gold_service_live","kep_stream_batchlog","dim_request_scd2"]:
+          "kep_stream_quarantine","kep_gold_service_live","kep_stream_batchlog","dim_request_scd2"]:
     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
 for p in ["kep_landing","_schemas/kep_autoloader","_checkpoints/kep_autoloader","_checkpoints/kep_silver_stream"]:
     dbutils.fs.rm(f"/Volumes/workspace/aade/aade_data/{p}", recurse=True)
@@ -99,5 +108,5 @@ for p in ["kep_landing","_schemas/kep_autoloader","_checkpoints/kep_autoloader",
 ## 🎯 Learning outcomes
 
 full vs incremental· **audit log/metrics**· high-water-mark· append vs MERGE upsert· **Auto Loader**
-(cloudFiles/checkpoint/rescued data/schema drift)· **Structured Streaming** (foreachBatch: dedup+MERGE+
-Gold+exactly-once)· **SCD Type 2** (versioned history). → Όλη η «Ημέρα 4: Incremental Ingestion & Streaming».
+(cloudFiles/checkpoint/rescued data/schema drift)· **Structured Streaming** (foreachBatch: DQ/quarantine+
+dedup+MERGE+Gold+exactly-once)· **SCD Type 2** (versioned history). → Όλη η «Ημέρα 4: Incremental Ingestion & Streaming».

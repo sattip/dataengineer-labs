@@ -25,7 +25,7 @@
 ```python
 for t in ["kep_requests_src","kep_bronze_full","kep_bronze_incr","kep_watermark","etl_audit_log",
           "kep_bronze_autoloader","kep_silver_by_service","kep_stream_src","kep_silver_stream",
-          "kep_gold_service_live","kep_stream_batchlog","dim_request_scd2"]:
+          "kep_stream_quarantine","kep_gold_service_live","kep_stream_batchlog","dim_request_scd2"]:
     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
 for p in ["kep_landing","_schemas/kep_autoloader","_checkpoints/kep_autoloader","_checkpoints/kep_silver_stream"]:
     dbutils.fs.rm(f"/Volumes/workspace/aade/aade_data/{p}", recurse=True)
