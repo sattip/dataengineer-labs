@@ -1,7 +1,7 @@
 # 🔁 Άσκηση Ημέρα 4 — Full Load vs Incremental Load
 
 > **Ρόλος 3: Μηχανικοί Δεδομένων · ΑΑΔΕ** · Fill-in-the-Blank σειρά 4 μερών
-> **~4.5 ώρες · ~57 TODOs** · Dataset: `kep_requests.csv` (10.000 αιτήματα ΚΕΠ)
+> **~4.5 ώρες · ~58 TODOs** · Dataset: `kep_requests.csv` (10.000 αιτήματα ΚΕΠ)
 
 ---
 
@@ -47,7 +47,7 @@ kep_requests.csv  (10.000 αιτήματα ΚΕΠ)
    │
  Μέρος 2 ──► Auto Loader: το checkpoint κρατάει μόνο του «ποια αρχεία διάβασα» + schema drift
    │
- Μέρος 3 ──► Structured Streaming: συνεχής ροή, foreachBatch (dedup → MERGE → Gold) exactly-once
+ Μέρος 3 ──► Structured Streaming: foreachBatch (DQ/quarantine → dedup → MERGE → Gold) exactly-once
    │
  Μέρος 4 ──► SCD Type 2: incremental ΜΕ ιστορικό (κρατάμε κάθε version μιας εγγραφής)
 ```
@@ -74,11 +74,12 @@ incremental έκανε **~80% λιγότερη δουλειά**. Μαθαίνε�
 Επίσης μαθαίνεις **schema drift**: όταν έρθει αρχείο με **νέα στήλη**, το pipeline **δεν σπάει** —
 η νέα στήλη «διασώζεται» στο `_rescued_data`.
 
-### 🟢 Μέρος 3 — Structured Streaming (`Exercise3_Streaming_Merge_STARTER.py`, ~70')
-**Τι κάνεις:** Το ίδιο μοντέλο, αλλά για **συνεχή ροή**. Κάθε micro-batch περνά από μια συνάρτηση
-`foreachBatch` που: (1) κάνει **dedup** (κρατά την τελευταία version), (2) **MERGE** στο Silver,
-(3) ανανεώνει ένα **Gold** aggregate, (4) γράφει metrics. Τρέχεις 3 φορές για να δεις το
-**exactly-once** (re-run χωρίς νέα δεδομένα → τίποτα δεν διπλογράφεται).
+### 🟢 Μέρος 3 — Structured Streaming (`Exercise3_Streaming_Merge_STARTER.py`, ~75')
+**Τι κάνεις:** Το ίδιο μοντέλο, αλλά για **συνεχή ροή**. Γράφεις **εσύ** όλο τον επεξεργαστή
+micro-batch (`foreachBatch`) που κάνει **4** πράγματα: (1) **Data Quality** — οι «κακές» γραμμές
+πάνε σε **quarantine** (δεν μολύνουν το Silver), (2) **dedup** (κρατά την τελευταία version),
+(3) **MERGE** upsert στο Silver, (4) **Gold** KPIs (με `pct_flagged`) + batch metrics. Τρέχεις 3
+φορές για να δεις το **exactly-once** (re-run χωρίς νέα → τίποτα δεν διπλογράφεται).
 
 **Η σημασία:** Είναι το production pattern για streaming pipelines — «μία γραμμή κώδικα ροής,
 μέσα κανονική batch λογική (MERGE)».
@@ -129,8 +130,8 @@ incremental έκανε **~80% λιγότερη δουλειά**. Μαθαίνε�
 ## ✅ Τι ξέρεις στο τέλος
 
 full vs incremental · audit log/metrics · watermark · append vs MERGE upsert · **Auto Loader**
-(checkpoint, schema drift, rescued data) · **Structured Streaming** (foreachBatch, dedup,
-exactly-once) · **SCD Type 2**. Δηλαδή: πώς να φορτώνεις **μόνο ό,τι άλλαξε — αξιόπιστα, φθηνά,
+(checkpoint, schema drift, rescued data) · **Structured Streaming** (foreachBatch: DQ/quarantine,
+dedup, MERGE, exactly-once) · **SCD Type 2**. Δηλαδή: πώς να φορτώνεις **μόνο ό,τι άλλαξε — αξιόπιστα, φθηνά,
 χωρίς διπλά**. Αυτή είναι η καθημερινή δουλειά σε ένα production lakehouse.
 
 ---
@@ -149,7 +150,7 @@ exactly-once) · **SCD Type 2**. Δηλαδή: πώς να φορτώνεις **
 |---|---|---|---|
 | `Exercise1_FullVsIncremental_STARTER.py` | Full vs incremental + audit log + reconciliation | ~80' | ~16 |
 | `Exercise2_AutoLoader_STARTER.py` | Auto Loader + schema drift + Silver agg | ~80' | ~15 |
-| `Exercise3_Streaming_Merge_STARTER.py` | Streaming foreachBatch (dedup + MERGE + Gold) | ~70' | ~14 |
+| `Exercise3_Streaming_Merge_STARTER.py` | Streaming foreachBatch (DQ/quarantine + dedup + MERGE + Gold) | ~75' | ~15 |
 | `Exercise4_SCD2_Bonus_STARTER.py` | SCD Type 2 (versioned history) | ~60' | ~12 |
 | `*_SOLUTION.py` | Πλήρεις, σχολιασμένες λύσεις | — | — |
 | `STEP_BY_STEP_Exercises.md` | Οδηγός + hints ανά TODO + trainer tips | — | — |
