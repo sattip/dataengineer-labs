@@ -141,31 +141,36 @@ print(f"Default join → BroadcastHashJoin; {('BroadcastHashJoin' in get_plan(pl
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 🧠 ΕΝΝΟΙΑ 3 — Caching
+# MAGIC ## 🧠 ΕΝΝΟΙΑ 3 — «Caching» (materialization) σε Serverless
 # MAGIC
-# MAGIC Αν ένα DataFrame το **ξαναχρησιμοποιείς** πολλές φορές, το `.cache()` το κρατά στη μνήμη μετά
-# MAGIC την 1η υλοποίηση → οι επόμενες πράξεις είναι πολύ ταχύτερες (δεν ξανα-υπολογίζεται από την αρχή).
-# MAGIC ⚠️ Cache **μόνο** ό,τι ξαναχρησιμοποιείς — αλλιώς σπαταλάς μνήμη.
+# MAGIC Όταν ξαναχρησιμοποιείς ένα ακριβό αποτέλεσμα, θες να μην το ξανα-υπολογίζεις.
+# MAGIC ⚠️ Σε **Serverless** το `.cache()` / `.persist()` **ΔΕΝ υποστηρίζεται** (`PERSIST TABLE not supported`)
+# MAGIC — το Serverless κάνει auto-caching. Ο serverless-safe τρόπος να «υλοποιήσεις & επαναχρησιμοποιήσεις»
+# MAGIC είναι να **γράψεις σε Delta table** και να διαβάζεις από αυτό.
+# MAGIC > 💡 Σε **classic cluster** θα έγραφες `agg.cache()` + `agg.is_cached`. Εδώ κάνουμε materialize.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## ✍️ TODO 3 — Cache ένα reused aggregate
+# MAGIC ## ✍️ TODO 3 — Materialize ένα reused aggregate (serverless-safe)
 
 # COMMAND ----------
 
-agg = (joined.groupBy("____________")                                     # TODO 3 (pre): region_name
-       .agg(count("*").alias("n"), spark_sum("__________").alias("total")))   # και: amount_eur
+agg = (joined.groupBy("____________")                                     # TODO 3a: region_name
+       .agg(count("*").alias("n"), spark_sum("__________").alias("total")))   # TODO 3b: amount_eur
 
-# 3a: cache το agg (θα το χρησιμοποιήσουμε 2 φορές)
-agg.________()                                     # TODO 3a: cache
+# 1η χρήση (cold) — υπολογισμός από το joined (shuffle + join)
+_, ms1 = timed("cold (από joined)", lambda: agg.count())
 
-_, ms1 = timed("1η materialization (cold)", lambda: agg.count())
-_, ms2 = timed("2η χρήση (cached, πιο γρήγορη)", lambda: agg.orderBy(col("total").desc()).collect())
+# 3c: «cache» serverless-safe = MATERIALIZE σε Delta table
+AGG_TBL = "workspace.aade.perf_agg_materialized"
+agg.write.format("delta").mode("__________").saveAsTable(AGG_TBL)   # TODO 3c: overwrite
+agg_fast = spark.table(AGG_TBL)
 
-# 3b: επιβεβαίωσε ότι είναι cached
-print(f"agg.is_cached = {agg.________}")           # TODO 3b: is_cached
-agg.show(truncate=False)
+# 2η χρήση — διαβάζει από το materialized Delta (γρήγορα, χωρίς ξανα-υπολογισμό)
+_, ms2 = timed("materialized (από Delta)", lambda: agg_fast.orderBy(col("total").desc()).collect())
+print(f"materialized table: {AGG_TBL}")
+agg_fast.show(truncate=False)
 
 # COMMAND ----------
 
@@ -208,8 +213,8 @@ print(f"Γραμμές Αττικής: {one_region.count():,}")
 (spark.createDataFrame(
     [("repartition16", n_rep, spark.table(FACT).count(), 0),
      ("coalesce4",     n_col, spark.table(FACT).count(), 0),
-     ("agg_cold",      None,  agg.count(),               ms1),
-     ("agg_cached",    None,  agg.count(),               ms2)],
+     ("agg_cold",          None, agg.count(),       ms1),
+     ("agg_materialized",  None, agg_fast.count(),  ms2)],
     ["step","n_partitions","rows","duration_ms"])
  .withColumn("logged_at", current_timestamp())
  .write.format("delta").mode("________").saveAsTable(PERFLOG))   # TODO 5: append
@@ -227,8 +232,8 @@ results = {
     "repartition → 16 partitions":      n_rep == 16,
     "coalesce → ≤ 16 (μείωση)":         n_col <= 16,
     "Broadcast join στο plan":          has_broadcast,
-    "agg είναι cached":                 agg.is_cached == True,
-    "2η χρήση ≤ 1η (cache βοήθησε)":     ms2 <= ms1 + 1,   # cached συνήθως ταχύτερο/ίσο
+    "Materialized table δημιουργήθηκε":  spark.catalog.tableExists("workspace.aade.perf_agg_materialized"),
+    "Materialized == agg (ορθότητα)":    spark.table("workspace.aade.perf_agg_materialized").count() == agg.count(),
     "Partitioned by region_name":       detail["partitionColumns"] == ["region_name"],
     "perf_log ≥ 4 βήματα":              spark.table(PERFLOG).count() >= 4,
 }

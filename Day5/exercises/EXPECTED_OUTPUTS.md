@@ -13,7 +13,7 @@
 | `repartition(16)` | **16** partitions |
 | `coalesce(4)` | **≤ 16** (μείωση, no shuffle) |
 | Broadcast join | plan περιέχει **`BroadcastHashJoin`** |
-| Cache | `agg.is_cached == True`· 2η χρήση ≤ 1η |
+| «Cache» (materialize σε Delta) | `perf_agg_materialized` δημιουργήθηκε· 2η χρήση (από Delta) ≤ 1η· materialized == agg (ορθότητα) |
 | Partitioned write | `partitionColumns == ["region_name"]` |
 | perf_log | ≥ 4 βήματα |
 

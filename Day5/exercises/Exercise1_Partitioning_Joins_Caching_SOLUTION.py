@@ -54,13 +54,14 @@ print("BroadcastHashJoin:", has_broadcast)
 
 # COMMAND ----------
 
-# TODO 3 — cache
+# TODO 3 — materialize (serverless-safe· .cache() δεν υποστηρίζεται σε serverless)
 agg = joined.groupBy("region_name").agg(count("*").alias("n"), spark_sum("amount_eur").alias("total"))
-agg.cache()
 _, ms1 = timed("cold", lambda: agg.count())
-_, ms2 = timed("cached", lambda: agg.orderBy(col("total").desc()).collect())
-print("is_cached:", agg.is_cached)
-agg.show(truncate=False)
+AGG_TBL = "workspace.aade.perf_agg_materialized"
+agg.write.format("delta").mode("overwrite").saveAsTable(AGG_TBL)
+agg_fast = spark.table(AGG_TBL)
+_, ms2 = timed("materialized", lambda: agg_fast.orderBy(col("total").desc()).collect())
+agg_fast.show(truncate=False)
 
 # COMMAND ----------
 
@@ -78,7 +79,7 @@ print("Αττική rows:", one.count())
     [("repartition16",n_rep,spark.table(FACT).count(),0),
      ("coalesce4",n_col,spark.table(FACT).count(),0),
      ("agg_cold",None,agg.count(),ms1),
-     ("agg_cached",None,agg.count(),ms2)],
+     ("agg_materialized",None,agg_fast.count(),ms2)],
     ["step","n_partitions","rows","duration_ms"])
  .withColumn("logged_at", current_timestamp())
  .write.format("delta").mode("append").saveAsTable(PERFLOG))

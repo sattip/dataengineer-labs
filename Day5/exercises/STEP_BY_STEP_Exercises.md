@@ -21,11 +21,12 @@
 |---|---|
 | 1a/1b | `repartition` · `coalesce` |
 | 2a | `broadcast` (στο μικρό dim) |
-| 3a/3b | `cache` · `is_cached` |
+| 3a/3b/3c | `region_name` · `amount_eur` · `overwrite` (materialize σε Delta) |
 | 4a | `partitionBy` |
 | 5 | `append` (perf_log) |
 
-**✅ Expected:** 16 partitions· `BroadcastHashJoin` στο plan· `is_cached=True`· partitionColumns=`[region_name]`.
+**✅ Expected:** 16 partitions· `BroadcastHashJoin` στο plan· materialized table `perf_agg_materialized`· partitionColumns=`[region_name]`.
+> ⚠️ Serverless: `.cache()`/`.persist()` & RDD ΔΕΝ υποστηρίζονται → materialize σε Delta + `num_partitions()` helper.
 
 > 🧑‍🏫 **Tip:** Άνοιξε το `explain()` και δείξε `BroadcastHashJoin` vs `SortMergeJoin + Exchange`.
 > Το `Exchange` = shuffle = ακριβό. Partition pruning: query με `WHERE region` διαβάζει 1 φάκελο.
