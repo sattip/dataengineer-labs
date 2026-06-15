@@ -84,13 +84,48 @@
 
 ---
 
+# 🧊 ΜΕΡΟΣ 5 — Liquid Clustering & Data Skipping (Advanced, ~75')
+
+| TODO | Hint |
+|---|---|
+| 1a | `CLUSTER BY` |
+| 2a/2b | `OPTIMIZE` · `HISTORY` |
+| 3a/3b | `region_id` · `2` |
+| 4a/4b | `enableDeletionVectors` · `DELETE` |
+| 5a | `CLUSTER BY` (afm) |
+
+**✅ Expected:** clusteringColumns set· OPTIMIZE ran· Deletion Vectors=true· clustering keys αλλάζουν χωρίς rewrite.
+
+> 🧑‍🏫 **Tip:** Liquid Clustering = «partitioning χωρίς τους πόνους» (no rigid folders, multi-dim, αλλάζεις keys instant).
+
+---
+
+# 🔏 ΜΕΡΟΣ 6 — PII Tokenization & ABAC (Advanced, ~70')
+
+| TODO | Hint |
+|---|---|
+| 1a/1b | `sha2` · `256` |
+| 2a | `afm_token` |
+| 3a | `afm` (salted) |
+| 4a/4b/4c | `current_user` · `IN` · `current_user` |
+| 5 | `TAGS` |
+
+**✅ Expected:** token 64 hex· 1:1 joinable· salted≠unsalted· ABAC → μόνο Αττική για current_user.
+
+> 🧑‍🏫 **Tip:** Masking (Μέρος 3) κρύβει· tokenization (Μέρος 6) **ψευδωνυμοποιεί** (joinable, μη-αναστρέψιμο).
+> Το ABAC με entitlements είναι ο production τρόπος — όχι hardcoded κανόνες.
+
+---
+
 ## 🧹 Reset
 
 ```python
-for t in ["perf_requests_fact","perf_regions_dim","perf_requests_partitioned","perf_log",
-          "skew_fact","pii_declarations","pii_declarations_masked","pii_declarations_myregion",
-          "gov_revenue_by_region"]:
+for t in ["perf_requests_fact","perf_regions_dim","perf_requests_partitioned","perf_log","perf_agg_materialized",
+          "skew_fact","pii_declarations","gov_revenue_by_region",
+          "lc_source","lc_clustered","tok_declarations","entitlements"]:
     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
+for v in ["pii_declarations_masked","pii_declarations_myregion","tok_declarations_shared","tok_declarations_abac"]:
+    spark.sql(f"DROP VIEW IF EXISTS workspace.aade.{v}")
 ```
 
 ## 🎯 Learning outcomes
