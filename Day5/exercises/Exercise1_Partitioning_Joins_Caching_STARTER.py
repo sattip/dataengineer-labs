@@ -66,7 +66,7 @@ regions = spark.createDataFrame(
     ["region_id","region_name"])
 regions.write.format("delta").mode("overwrite").saveAsTable(DIM)
 
-spark.sql(f"CREATE TABLE IF NOT EXISTS {PERFLOG} (step STRING, n_partitions INT, rows BIGINT, duration_ms BIGINT, logged_at TIMESTAMP) USING delta")
+spark.sql(f"CREATE OR REPLACE TABLE {PERFLOG} (step STRING, n_partitions BIGINT, rows BIGINT, duration_ms BIGINT, logged_at TIMESTAMP) USING delta")
 
 def timed(step, df_action):
     t0 = time.time(); result = df_action(); ms = int((time.time()-t0)*1000)

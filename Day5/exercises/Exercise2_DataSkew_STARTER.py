@@ -155,8 +155,12 @@ print(f"Βελτίωση: {skew_max_part/salt_max_part:,.1f}x μικρότερο
 
 # COMMAND ----------
 
+# ⚠️ Serverless: η ανάγνωση κάποιων Spark configs είναι αποκλεισμένη → try/except
 for k in ["spark.sql.adaptive.enabled", "spark.sql.adaptive.skewJoin.enabled"]:
-    print(f"  {k} = {spark.conf.get(k, 'n/a')}")
+    try:
+        print(f"  {k} = {spark.conf.get(k)}")
+    except Exception:
+        print(f"  {k} = (μη-αναγνώσιμο σε serverless· είναι ON by default)")
 
 # COMMAND ----------
 
