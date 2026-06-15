@@ -5,6 +5,9 @@
 >
 > 🆕 **Advanced (Μέρη 5-6):** Liquid Clustering & Data Skipping · PII Tokenization & ABAC —
 > σύγχρονα production patterns, όλα serverless-safe.
+>
+> 📚 **Self-paced:** Διάβασε πρώτα το **`ΘΕΩΡΙΑ_Day5_SelfPaced.md`** (πλήρης θεωρία ανά Μέρος:
+> background → internals → πότε το χρησιμοποιείς → παγίδες → glossary). Δεν χρειάζεσαι εισηγητή.
 
 ---
 
