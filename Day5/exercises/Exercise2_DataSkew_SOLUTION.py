@@ -56,7 +56,10 @@ print(f"skew max={skew_max_part:,} salted max={salt_max_part:,} improvement={ske
 
 # AQE
 for k in ["spark.sql.adaptive.enabled","spark.sql.adaptive.skewJoin.enabled"]:
-    print(k, "=", spark.conf.get(k, "n/a"))
+    try:
+        print(k, "=", spark.conf.get(k))
+    except Exception:
+        print(k, "= (μη-αναγνώσιμο σε serverless· ON by default)")
 
 # COMMAND ----------
 
