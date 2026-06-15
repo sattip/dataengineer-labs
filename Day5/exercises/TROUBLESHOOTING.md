@@ -13,15 +13,21 @@
 | `workspace.information_schema.*` → not found | Διαφορετικό catalog name | Αντικαταστήστε `workspace` με τον δικό σας catalog (`SELECT current_catalog()`). |
 | `PARSE_SYNTAX_ERROR` σε `USAGE` | Legacy keyword | Σε UC είναι **`USE SCHEMA`**, όχι `USAGE`. |
 | GRANT → `insufficient privileges` | Δεν είστε owner/admin του schema | Wrapped σε try/except. Σε production με κατάλληλο ρόλο δουλεύει. |
+| `CLUSTER BY` / `enableDeletionVectors` → error (Μέρος 5) | Πολύ παλιό runtime | Liquid Clustering & Deletion Vectors θέλουν DBR 13.3+/Serverless. Σε classic, ανέβασε runtime. |
+| `clusteringColumns` κενό μετά `CLUSTER BY` | Δεν έτρεξε ακόμη `OPTIMIZE` | Τα clustering keys ορίζονται· το clustering υλοποιείται με `OPTIMIZE`. |
+| ABAC view 0 γραμμές (Μέρος 6) | Δεν μπήκε entitlement για τον current_user | Τρέξε `INSERT ... SELECT current_user(), 'Αττική'` πριν φτιάξεις/διαβάσεις το view. |
+| `SET TAGS` → error (Μέρος 6) | Governed tags / δικαιώματα (Free Edition) | Wrapped σε try/except → `SKIP`. Σε production UC δουλεύει. |
 | Ελληνικά «σπασμένα» | Encoding | UTF-8· το `display()` τα δείχνει σωστά. |
 
 ## 🧹 Reset (καθαρό ξεκίνημα)
 
 ```python
 for t in ["perf_requests_fact","perf_regions_dim","perf_requests_partitioned","perf_log","perf_agg_materialized",
-          "skew_fact","pii_declarations","pii_declarations_masked","pii_declarations_myregion",
-          "gov_revenue_by_region"]:
+          "skew_fact","pii_declarations","gov_revenue_by_region",
+          "lc_source","lc_clustered","tok_declarations","entitlements"]:
     spark.sql(f"DROP TABLE IF EXISTS workspace.aade.{t}")
+for v in ["pii_declarations_masked","pii_declarations_myregion","tok_declarations_shared","tok_declarations_abac"]:
+    spark.sql(f"DROP VIEW IF EXISTS workspace.aade.{v}")
 # αν εφαρμόστηκαν UC policies και έμειναν:
 # spark.sql("ALTER TABLE workspace.aade.pii_declarations DROP ROW FILTER")
 # spark.sql("ALTER TABLE workspace.aade.pii_declarations ALTER COLUMN afm DROP MASK")

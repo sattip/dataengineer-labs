@@ -1,7 +1,10 @@
 # ⚡🔐 Άσκηση Ημέρα 5 — Performance & Security
 
-> **Ρόλος 3: Μηχανικοί Δεδομένων · ΑΑΔΕ** · Fill-in-the-Blank σειρά 4 μερών
-> **~4.5 ώρες · ~58 TODOs** πραγματικού κώδικα.
+> **Ρόλος 3: Μηχανικοί Δεδομένων · ΑΑΔΕ** · Fill-in-the-Blank · **4 μέρη + 2 advanced (bonus)**
+> **~6 ώρες** πραγματικού κώδικα.
+>
+> 🆕 **Advanced (Μέρη 5-6):** Liquid Clustering & Data Skipping · PII Tokenization & ABAC —
+> σύγχρονα production patterns, όλα serverless-safe.
 
 ---
 
@@ -84,6 +87,8 @@ RBAC matrix, **GRANT/REVOKE** (`USE SCHEMA` + `SELECT`), **`information_schema`*
 | `Exercise2_DataSkew_STARTER.py` | skew detection + salting (correctness-verified) | ~75' | ~14 |
 | `Exercise3_Masking_RowLevel_STARTER.py` | masking + row-level security (PII) | ~70' | ~15 |
 | `Exercise4_Governance_Audit_STARTER.py` | GRANT/REVOKE, information_schema, PII discovery, audit | ~60' | ~13 |
+| `Exercise5_LiquidClustering_DataSkipping_STARTER.py` | **(Advanced)** Liquid Clustering, data skipping, deletion vectors | ~75' | ~9 |
+| `Exercise6_PII_Tokenization_ABAC_STARTER.py` | **(Advanced)** sha2 pseudonymization, salted hashing, ABAC RLS | ~70' | ~9 |
 | `*_SOLUTION.py` | πλήρεις λύσεις | — | — |
 | `STEP_BY_STEP_Exercises.md` · `EXPECTED_OUTPUTS.md` · `TROUBLESHOOTING.md` | οδηγοί | — | — |
 

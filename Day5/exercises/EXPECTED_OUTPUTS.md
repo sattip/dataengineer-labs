@@ -63,6 +63,27 @@ Self-check → όλα `✅ OK` και `🎉🎉 ΟΛΟΚΛΗΡΩΣΑΤΕ ΟΛΗ 
 
 ---
 
+## Μέρος 5 — Liquid Clustering & Data Skipping (Advanced)
+
+| Βήμα | Αποτέλεσμα |
+|---|---|
+| `CLUSTER BY (region_id, service_id)` | `clusteringColumns` = `region_id, service_id` |
+| `OPTIMIZE` | ≥ 1 OPTIMIZE operation στο history |
+| Φιλτραρισμένο query | επιστρέφει γραμμές· data filters στο plan |
+| Deletion Vectors | `delta.enableDeletionVectors = true`· DELETE μειώνει το count |
+| `ALTER TABLE CLUSTER BY (afm)` | νέα `clusteringColumns` = `afm` (χωρίς rewrite) |
+
+## Μέρος 6 — PII Tokenization & ABAC (Advanced)
+
+| Βήμα | Αποτέλεσμα |
+|---|---|
+| `sha2(afm, 256)` | token **64 hex chars** |
+| 1:1 mapping | distinct ΑΦΜ == distinct tokens (joinable, no collisions) |
+| Salted vs unsalted (ίδιο ΑΦΜ) | **διαφορετικά** tokens |
+| Shared view | ΔΕΝ περιέχει raw `afm` (μόνο `afm_token`) |
+| ABAC view | ο current_user βλέπει **μόνο** `Αττική` (από entitlements)· count == Αττική count |
+| Sensitivity tag | `✅` σε production UC, `ℹ️ SKIP` σε Free Edition |
+
 ## Tables που δημιουργούνται (`workspace.aade`)
 
 `perf_requests_fact`, `perf_regions_dim`, `perf_requests_partitioned`, `perf_log`, `skew_fact`,
